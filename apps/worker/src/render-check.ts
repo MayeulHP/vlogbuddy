@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import type { MediaItem } from "@vlogbuddy/db";
 import { timelineDocSchema, type TimelineDoc } from "@vlogbuddy/shared";
 import { buildFilterGraph } from "./jobs/render.js";
-import { supportsDrawText } from "./ffmpeg.js";
+import { probe, supportsDrawText } from "./ffmpeg.js";
 
 const DIR = process.argv[2] ?? "/tmp/vbrender";
 
@@ -18,6 +18,7 @@ const ID = {
   p2: "22222222-2222-4222-8222-222222222222",
   v1: "33333333-3333-4333-8333-333333333333",
   v2: "44444444-4444-4444-8444-444444444444",
+  vs: "55555555-5555-4555-8555-555555555555", // video with NO audio track
 } as const;
 const OUT = path.join(DIR, "out");
 
@@ -63,15 +64,55 @@ function clip(over: Partial<Clip> & Pick<Clip, "id" | "mediaItemId">): Clip {
   };
 }
 
+/** Extracts a single frame as raw bytes, for comparing two renders. */
+async function frameBytes(video: string, atSecond: number): Promise<Buffer | null> {
+  const frame = `${video}.f${atSecond}.bmp`;
+  const ok = await new Promise<boolean>((resolve) => {
+    const child = spawn(
+      "ffmpeg",
+      ["-hide_banner", "-loglevel", "error", "-y", "-ss", String(atSecond),
+       "-i", video, "-frames:v", "1", frame],
+      { stdio: "ignore" },
+    );
+    child.on("close", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+  if (!ok) return null;
+
+  const { readFile, unlink } = await import("node:fs/promises");
+  try {
+    const buf = await readFile(frame);
+    await unlink(frame).catch(() => {});
+    return buf;
+  } catch {
+    return null;
+  }
+}
+
 async function runCase(
   name: string,
   timeline: TimelineDoc,
   mediaList: MediaItem[],
   files: Record<string, string>,
   audioPath: string | null,
+  /** When set, assert that title text is actually visible at this timestamp. */
+  expectTextAt?: number,
 ) {
   const mediaById = new Map(mediaList.map((m) => [m.id, m]));
   const localPaths = new Map(Object.entries(files).map(([id, f]) => [id, path.join(DIR, f)]));
+
+  // The real render probes each source for an audio stream; do the same here so
+  // this exercises the same code path.
+  const hasAudio = new Map<string, boolean>();
+  for (const m of mediaList) {
+    const local = localPaths.get(m.id);
+    if (!local || m.kind !== "video") {
+      hasAudio.set(m.id, false);
+      continue;
+    }
+    const info = await probe(local).catch(() => null);
+    hasAudio.set(m.id, info?.hasAudio ?? false);
+  }
 
   const outFile = path.join(OUT, `${name}.mp4`);
 
@@ -80,6 +121,7 @@ async function runCase(
       timeline,
       mediaById,
       localPaths,
+      hasAudio,
       audioPath: audioPath ? path.join(DIR, audioPath) : null,
       width: 1280,
       height: 720,
@@ -128,12 +170,57 @@ async function runCase(
     const okDims = v?.width === 1280 && v?.height === 720;
     const okAudio = audioLabel ? Boolean(a) : true;
 
+    // A valid MP4 isn't proof the title drew: drawtext can silently render
+    // nothing. Re-render the identical timeline with titles disabled and
+    // compare — matching frames mean the text never appeared.
+    let titleNote = "";
+    let titlesOk = true;
+    if (expectTextAt !== undefined && (await supportsDrawText())) {
+      const bare = path.join(OUT, `${name}.notitle.mp4`);
+      const g2 = buildFilterGraph({
+        timeline, mediaById, localPaths, hasAudio,
+        audioPath: audioPath ? path.join(DIR, audioPath) : null,
+        width: 1280, height: 720, fps: 30,
+        allowTitles: false,
+        fontFile: process.env.FONT_PATH || null,
+      });
+      await new Promise<void>((resolve) => {
+        const c = spawn("ffmpeg", [
+          "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+          ...g2.args, "-map", g2.outputLabel,
+          ...(g2.audioLabel ? ["-map", g2.audioLabel] : []),
+          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+          "-pix_fmt", "yuv420p", "-r", "30",
+          ...(g2.audioLabel ? ["-c:a", "aac"] : ["-an"]),
+          bare,
+        ], { stdio: "ignore" });
+        c.on("close", () => resolve());
+        c.on("error", () => resolve());
+      });
+
+      const [withT, withoutT] = await Promise.all([
+        frameBytes(outFile, expectTextAt),
+        frameBytes(bare, expectTextAt),
+      ]);
+
+      if (!withT || !withoutT) {
+        titlesOk = false;
+        titleNote = "  ⚠ COULD NOT COMPARE FRAMES";
+      } else if (withT.equals(withoutT)) {
+        titlesOk = false;
+        titleNote = "  ⚠ TITLE NOT RENDERED";
+      } else {
+        titleNote = "  title drawn ✓";
+      }
+    }
+
     console.log(
-      `✓ ${name.padEnd(28)} ${v?.width}x${v?.height} ${duration.toFixed(2)}s ` +
-        `${a ? "a/v" : "video-only"}${okDims ? "" : "  ⚠ WRONG DIMS"}${okAudio ? "" : "  ⚠ NO AUDIO"}`,
+      `${titlesOk ? "✓" : "✗"} ${name.padEnd(28)} ${v?.width}x${v?.height} ${duration.toFixed(2)}s ` +
+        `${a ? "a/v" : "video-only"}${okDims ? "" : "  ⚠ WRONG DIMS"}` +
+        `${okAudio ? "" : "  ⚠ NO AUDIO"}${titleNote}`,
     );
 
-    if (!okDims || !okAudio) failures++;
+    if (!okDims || !okAudio || !titlesOk) failures++;
     return duration;
   } catch (err) {
     console.log(`✗ ${name.padEnd(28)}`);
@@ -152,12 +239,14 @@ async function main() {
     p2: media(ID.p2, "photo", "photo2.jpg", null),
     v1: media(ID.v1, "video", "video1.mp4", 6),
     v2: media(ID.v2, "video", "video2_portrait.mp4", 5),
+    vs: media(ID.vs, "video", "video_silent.mp4", 4),
   };
   const files = {
     [ID.p1]: "photo1.jpg",
     [ID.p2]: "photo2.jpg",
     [ID.v1]: "video1.mp4",
     [ID.v2]: "video2_portrait.mp4",
+    [ID.vs]: "video_silent.mp4",
   };
 
   const doc = (over: Partial<TimelineDoc>) =>
@@ -214,6 +303,7 @@ async function main() {
       ],
     }),
     [m.p1, m.v1], files, null,
+    1.2, // assert the title is actually visible here
   );
 
   // 5. Music bed mixed over clip audio, with ducking.
@@ -269,6 +359,27 @@ async function main() {
       ],
     }),
     [m.p1], files, null,
+    1.0, // "50% off: it's \"great\", right?" must actually render
+  );
+
+  // 10. Video with no audio track — must not break the graph.
+  await runCase(
+    "silent-video",
+    doc({ clips: [clip({ id: "a", mediaItemId: ID.vs, kind: "video", trimStart: 0, trimEnd: 2 })] }),
+    [m.vs], files, null,
+  );
+
+  // 11. Silent + audio video together, with a music bed over the top.
+  await runCase(
+    "silent-mixed-with-audio",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.vs, kind: "video", trimStart: 0, trimEnd: 2 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2, transitionIn: "crossfade", transitionDuration: 0.5 }),
+      ],
+      audio: [{ musicItemId: null, mediaItemId: null, offset: 0, startAt: 0, volume: 0.7, fadeIn: 0.5, fadeOut: 1 }],
+    }),
+    [m.vs, m.v1], files, "music.m4a",
   );
 
   console.log(

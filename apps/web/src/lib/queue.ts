@@ -40,6 +40,19 @@ async function getBoss(): Promise<PgBoss> {
       });
       instance.on("error", (err) => console.error("[queue] error:", err));
       await instance.start();
+
+      // pg-boss v10 drops jobs sent to queues that don't exist yet. The worker
+      // creates these too, but whichever process starts first must win.
+      for (const queue of [QUEUE_PROCESS_MEDIA, QUEUE_EXTRACT_AUDIO, QUEUE_RENDER]) {
+        try {
+          await instance.createQueue(queue);
+        } catch (err) {
+          if (!/already exists/i.test((err as Error).message)) {
+            console.error(`[queue] could not create '${queue}':`, err);
+          }
+        }
+      }
+
       boss = instance;
       return instance;
     })();

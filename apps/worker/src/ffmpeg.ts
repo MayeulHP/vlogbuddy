@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
-import { env } from "./env";
+
+/**
+ * Binary paths are read straight from the environment rather than through the
+ * validated config, so this module stays usable without database/storage
+ * settings — capability probes and the render-check tool don't need them.
+ */
+const ffmpegBin = () => process.env.FFMPEG_PATH || "ffmpeg";
+const ffprobeBin = () => process.env.FFPROBE_PATH || "ffprobe";
 
 export interface ProbeResult {
   durationSeconds: number | null;
@@ -56,7 +63,7 @@ function run(
 }
 
 export async function probe(filePath: string): Promise<ProbeResult> {
-  const { stdout } = await run(env().FFPROBE_PATH, [
+  const { stdout } = await run(ffprobeBin(), [
     "-v", "quiet",
     "-print_format", "json",
     "-show_format",
@@ -108,7 +115,7 @@ export async function ffmpeg(
 ): Promise<void> {
   const { totalDuration, onProgress } = opts;
 
-  await run(env().FFMPEG_PATH, ["-hide_banner", "-nostdin", "-y", ...args], (chunk) => {
+  await run(ffmpegBin(), ["-hide_banner", "-nostdin", "-y", ...args], (chunk) => {
     if (!totalDuration || !onProgress) return;
     // e.g. "time=00:01:23.45"
     const match = chunk.match(/time=(\d+):(\d+):(\d+\.?\d*)/);
@@ -192,27 +199,44 @@ let drawTextSupport: boolean | null = null;
 
 export async function supportsDrawText(): Promise<boolean> {
   if (drawTextSupport !== null) return drawTextSupport;
+
   try {
-    const { stdout } = await run(env().FFMPEG_PATH, ["-hide_banner", "-filters"]);
+    const { stdout } = await run(ffmpegBin(), ["-hide_banner", "-filters"]);
     drawTextSupport = /\bdrawtext\b/.test(stdout);
-  } catch {
+    if (!drawTextSupport) {
+      console.warn(
+        "[ffmpeg] this build has no drawtext filter (missing libfreetype) — " +
+          "titles will be skipped in renders",
+      );
+    }
+  } catch (err) {
+    // Don't let an unrelated failure masquerade as "no drawtext".
     drawTextSupport = false;
-  }
-  if (!drawTextSupport) {
     console.warn(
-      "[ffmpeg] this build has no drawtext filter (missing libfreetype) — " +
-        "titles will be skipped in renders",
+      `[ffmpeg] could not probe filters (${(err as Error).message.split("\n")[0]}) — ` +
+        "assuming no drawtext; titles will be skipped",
     );
   }
+
   return drawTextSupport;
 }
 
-/** Escapes text for FFmpeg's drawtext filter, which is fussy about quoting. */
+/**
+ * Escapes user text for drawtext, which is fussy about quoting.
+ *
+ * The result is wrapped in single quotes by the caller, which protects commas
+ * and other filtergraph separators. Remaining concerns:
+ *  - backslash and colon still need escaping inside the quotes
+ *  - a literal `'` would terminate the quoted string, so we swap in a
+ *    typographic apostrophe (visually identical, avoids the problem entirely)
+ *
+ * `%` is deliberately NOT escaped: the caller sets `expansion=none`, which
+ * disables text expansion. Escaping it there would render a literal backslash.
+ */
 export function escapeDrawText(text: string): string {
   return text
     .replace(/\\/g, "\\\\")
     .replace(/:/g, "\\:")
     .replace(/'/g, "\u2019")
-    .replace(/%/g, "\\%")
-    .replace(/\n/g, " ");
+    .replace(/[\r\n]+/g, " ");
 }

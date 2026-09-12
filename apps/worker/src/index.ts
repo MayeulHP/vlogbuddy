@@ -23,6 +23,18 @@ async function main() {
   boss.on("error", (err) => console.error("[worker] queue error:", err));
 
   await boss.start();
+
+  // pg-boss v10 requires queues to exist before send()/work() — without this,
+  // jobs are silently dropped and nothing ever processes.
+  for (const queue of [QUEUE_PROCESS_MEDIA, QUEUE_EXTRACT_AUDIO, QUEUE_RENDER]) {
+    try {
+      await boss.createQueue(queue);
+    } catch (err) {
+      // Already exists — fine, this runs on every boot.
+      if (!/already exists/i.test((err as Error).message)) throw err;
+    }
+  }
+
   console.log("[worker] connected to queue");
 
   // Media processing is IO-heavy but light on CPU; a few in parallel is fine.

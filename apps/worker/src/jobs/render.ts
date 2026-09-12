@@ -18,7 +18,7 @@ import {
 } from "@vlogbuddy/shared";
 import { env } from "../env";
 import { buildStorageKey, downloadToFile, uploadFile } from "../storage";
-import { escapeDrawText, ffmpeg, supportsDrawText } from "../ffmpeg";
+import { escapeDrawText, ffmpeg, probe, supportsDrawText } from "../ffmpeg";
 import { notifyRenderProgress } from "../notify";
 
 export interface RenderJobPayload {
@@ -75,6 +75,7 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
     const mediaById = new Map<string, MediaItem>(mediaRows.map((m) => [m.id, m]));
 
     const localPaths = new Map<string, string>();
+    const hasAudio = new Map<string, boolean>();
 
     for (const [index, mediaId] of mediaIds.entries()) {
       const item = mediaById.get(mediaId);
@@ -84,6 +85,16 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
       const local = path.join(workDir, `src-${index}${ext}`);
       await downloadToFile(item.storageKey, local);
       localPaths.set(mediaId, local);
+
+      // Plenty of real videos carry no audio track (screen recordings, muted
+      // captures, action-cam modes). Referencing [n:a] for those makes the whole
+      // filtergraph fail, so probe rather than assume.
+      if (item.kind === "video") {
+        const info = await probe(local).catch(() => null);
+        hasAudio.set(mediaId, info?.hasAudio ?? false);
+      } else {
+        hasAudio.set(mediaId, false);
+      }
 
       const pct = ((index + 1) / mediaIds.length) * 15;
       await progress(renderJobId, render.vlogId, pct, "Fetching your clips…");
@@ -130,6 +141,7 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
       timeline,
       mediaById,
       localPaths,
+      hasAudio,
       audioPath,
       width,
       height,
@@ -206,6 +218,8 @@ export interface GraphOptions {
   timeline: TimelineDoc;
   mediaById: Map<string, MediaItem>;
   localPaths: Map<string, string>;
+  /** Whether each source actually carries an audio stream. */
+  hasAudio?: Map<string, boolean>;
   audioPath: string | null;
   width: number;
   height: number;
@@ -222,6 +236,7 @@ export function buildFilterGraph(opts: GraphOptions) {
     timeline,
     mediaById,
     localPaths,
+    hasAudio,
     audioPath,
     width,
     height,
@@ -280,6 +295,10 @@ export function buildFilterGraph(opts: GraphOptions) {
               : "h*0.88-text_h";
         return [
           `drawtext=text='${escapeDrawText(title.text)}'`,
+          // Render the text literally. Without this, drawtext treats `%` and
+          // `%{...}` as expansion syntax — a title containing "50% off" would
+          // silently render as nothing, and users could inject `%{pts}`.
+          `expansion=none`,
           // Explicit font file: Alpine has no fontconfig defaults, so drawtext
           // would otherwise fail with "Cannot find a valid font".
           ...(fontFile ? [`fontfile=${fontFile}`] : []),
@@ -300,7 +319,7 @@ export function buildFilterGraph(opts: GraphOptions) {
 
     // Audio: photos and muted clips contribute silence of the right length.
     const aLabel = `a${i}`;
-    if (isPhoto || clip.muted || !hasAudioStream(media)) {
+    if (isPhoto || clip.muted || !clipHasAudio(media, hasAudio)) {
       filters.push(
         `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration},asetpts=PTS-STARTPTS[${aLabel}]`,
       );
@@ -397,8 +416,13 @@ export function buildFilterGraph(opts: GraphOptions) {
   };
 }
 
-function hasAudioStream(media: MediaItem): boolean {
-  // Photos never have audio; for video we assume yes unless it's clearly not.
+/**
+ * Whether a source contributes an audio stream. Prefers the probe result; falls
+ * back to the conservative assumption that only videos might have audio.
+ */
+function clipHasAudio(media: MediaItem, probed?: Map<string, boolean>): boolean {
+  const known = probed?.get(media.id);
+  if (known !== undefined) return known;
   return media.kind === "video";
 }
 

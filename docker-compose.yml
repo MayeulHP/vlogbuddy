@@ -17,7 +17,8 @@ services:
       retries: 20
 
   minio:
-    image: minio/minio:latest
+    # MinIO publishes to quay.io, not Docker Hub.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -25,6 +26,10 @@ services:
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
       # Makes presigned URLs and redirects use the public hostname.
       MINIO_BROWSER_REDIRECT_URL: ${PUBLIC_STORAGE_URL}
+      # Browsers PUT directly to MinIO via presigned URLs, so the app origin
+      # must be allowed. MinIO doesn't implement the S3 PutBucketCors API —
+      # this env var is the supported way to configure it.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${PUBLIC_BASE_URL}
     volumes:
       - ./data/minio:/data
     ports:
@@ -38,7 +43,7 @@ services:
       retries: 20
 
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
@@ -46,7 +51,6 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_BUCKET: ${S3_BUCKET}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
     entrypoint: /bin/sh
     command:
       - -c
@@ -54,20 +58,7 @@ services:
         set -e
         mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"
         mc mb --ignore-existing "local/$$S3_BUCKET"
-        # Browsers upload directly via presigned URLs, so CORS must allow the app origin.
-        mc cors set "local/$$S3_BUCKET" /dev/stdin <<EOF
-        <CORSConfiguration>
-          <CORSRule>
-            <AllowedOrigin>$$PUBLIC_BASE_URL</AllowedOrigin>
-            <AllowedMethod>GET</AllowedMethod>
-            <AllowedMethod>PUT</AllowedMethod>
-            <AllowedMethod>HEAD</AllowedMethod>
-            <AllowedHeader>*</AllowedHeader>
-            <ExposeHeader>ETag</ExposeHeader>
-            <MaxAgeSeconds>3000</MaxAgeSeconds>
-          </CORSRule>
-        </CORSConfiguration>
-        EOF
+        # The bucket stays private: all access is via expiring presigned URLs.
         echo "minio-init: bucket '$$S3_BUCKET' ready"
     restart: "no"
 
@@ -83,7 +74,7 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       PUBLIC_STORAGE_URL: ${PUBLIC_STORAGE_URL}
       S3_ENDPOINT: ${S3_ENDPOINT}
@@ -113,7 +104,7 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_REGION: ${S3_REGION}
