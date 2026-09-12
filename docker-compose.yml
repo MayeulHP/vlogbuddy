@@ -1,0 +1,128 @@
+name: vlogbuddy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      # Makes presigned URLs and redirects use the public hostname.
+      MINIO_BROWSER_REDIRECT_URL: ${PUBLIC_STORAGE_URL}
+    volumes:
+      - ./data/minio:/data
+    ports:
+      # Your reverse proxy should forward PUBLIC_STORAGE_URL here.
+      - "${S3_PORT:-9000}:9000"
+      - "${S3_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        mc alias set local http://minio:9000 "$$S3_ACCESS_KEY" "$$S3_SECRET_KEY"
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+        # Browsers upload directly via presigned URLs, so CORS must allow the app origin.
+        mc cors set "local/$$S3_BUCKET" /dev/stdin <<EOF
+        <CORSConfiguration>
+          <CORSRule>
+            <AllowedOrigin>$$PUBLIC_BASE_URL</AllowedOrigin>
+            <AllowedMethod>GET</AllowedMethod>
+            <AllowedMethod>PUT</AllowedMethod>
+            <AllowedMethod>HEAD</AllowedMethod>
+            <AllowedHeader>*</AllowedHeader>
+            <ExposeHeader>ETag</ExposeHeader>
+            <MaxAgeSeconds>3000</MaxAgeSeconds>
+          </CORSRule>
+        </CORSConfiguration>
+        EOF
+        echo "minio-init: bucket '$$S3_BUCKET' ready"
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      PUBLIC_STORAGE_URL: ${PUBLIC_STORAGE_URL}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_PRESIGN_EXPIRY: ${S3_PRESIGN_EXPIRY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
+      ENABLE_YT_AUDIO: ${ENABLE_YT_AUDIO}
+      PORT: 3000
+    ports:
+      # Your reverse proxy should forward PUBLIC_BASE_URL here.
+      # WebSocket upgrade must be enabled for live voting + co-editing.
+      - "${WEB_PORT:-3000}:3000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      ENABLE_YT_AUDIO: ${ENABLE_YT_AUDIO}
+      RENDER_CONCURRENCY: ${RENDER_CONCURRENCY}
+      RENDER_HEIGHT: ${RENDER_HEIGHT}
+      RENDER_FPS: ${RENDER_FPS}
+    volumes:
+      - ./data/worker-tmp:/tmp/vlogbuddy

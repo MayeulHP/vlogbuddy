@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink-950 text-ink-100 antialiased;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(139, 92, 246, 0.12), transparent),
+    radial-gradient(ellipse 60% 50% at 90% 110%, rgba(6, 182, 212, 0.08), transparent);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
+           transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-white hover:bg-brand-400 active:scale-[0.98]
+           shadow-lg shadow-brand-500/20;
+  }
+  .btn-secondary {
+    @apply btn bg-ink-800 text-ink-200 hover:bg-ink-700 border border-ink-700;
+  }
+  .btn-ghost {
+    @apply btn text-ink-300 hover:bg-ink-800 hover:text-white;
+  }
+  .btn-danger {
+    @apply btn bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/30;
+  }
+
+  .card {
+    @apply rounded-xl border border-ink-800 bg-ink-900/70 backdrop-blur-sm;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2 text-sm text-white
+           placeholder:text-ink-500 focus:border-brand-500 focus:outline-none focus:ring-1
+           focus:ring-brand-500 transition-colors;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-ink-300 mb-1.5;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
+  }
+}
+
+/* Thin scrollbars for the horizontal dump/timeline strips. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.ink.700") transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: theme("colors.ink.700");
+  border-radius: 9999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: theme("colors.ink.600");
+}
+
+.text-ink-100 {
+  color: #e8e8f0;
+}
+.text-ink-200 {
+  color: #d0d0dd;
+}

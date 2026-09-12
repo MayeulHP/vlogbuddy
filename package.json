@@ -1,0 +1,21 @@
+{
+  "name": "vlogbuddy",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted collaborative vlog creation with your friends, with low effort.",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --filter @vlogbuddy/web dev",
+    "dev:worker": "pnpm --filter @vlogbuddy/worker dev",
+    "build": "pnpm --filter @vlogbuddy/shared build && pnpm --filter @vlogbuddy/db build && pnpm --filter @vlogbuddy/web build",
+    "start": "pnpm --filter @vlogbuddy/web start",
+    "db:generate": "pnpm --filter @vlogbuddy/db generate",
+    "db:migrate": "pnpm --filter @vlogbuddy/db migrate",
+    "db:push": "pnpm --filter @vlogbuddy/db push",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
