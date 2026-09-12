@@ -91,7 +91,10 @@ async function main() {
   const io = new SocketServer<ClientToServerEvents, ServerToClientEvents>(server, {
     path: "/api/socket",
     cors: {
-      origin: process.env.PUBLIC_BASE_URL ?? true,
+      origin:
+        process.env.CORS_ALLOW_ORIGIN === "*"
+          ? true
+          : (process.env.CORS_ALLOW_ORIGIN || process.env.PUBLIC_BASE_URL || true),
       credentials: true,
     },
     maxHttpBufferSize: 1e6,

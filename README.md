@@ -38,12 +38,13 @@ approval wins over a single enthusiast.
 
 ## Quick start
 
-**Requirements:** Docker + Docker Compose, and a reverse proxy you already run.
+**Requirements:** Docker + Docker Compose, and a reverse proxy you already run
+(skip the proxy if you're on a LAN — see [Access by IP](#access-by-ip-no-domain)).
 
 ```bash
-git clone <your-repo> vlogbuddy && cd vlogbuddy
-cp .env.example .env
-$EDITOR .env          # set the URLs and the secrets
+git clone https://github.com/MayeulHP/vlogbuddy.git && cd vlogbuddy
+./scripts/setup-env.sh    # copies .env.example and fills in random secrets
+$EDITOR .env              # set PUBLIC_BASE_URL and PUBLIC_STORAGE_URL
 docker compose up -d
 ```
 
@@ -54,13 +55,36 @@ Migrations run automatically on first boot. That's it.
 ```bash
 PUBLIC_BASE_URL=https://vlog.example.com          # where the app lives
 PUBLIC_STORAGE_URL=https://vlog-storage.example.com  # where MinIO lives
-SESSION_SECRET=$(openssl rand -hex 32)
-POSTGRES_PASSWORD=...
-S3_SECRET_KEY=...
 ```
 
-Both URLs must be reachable **from your friends' browsers** — uploads and
-downloads go directly to the storage endpoint via presigned URLs.
+Secrets (`SESSION_SECRET`, `POSTGRES_PASSWORD`, `S3_SECRET_KEY`) are generated
+by `./scripts/setup-env.sh`. Both URLs must be reachable **from your friends'
+browsers** — uploads and downloads go directly to the storage endpoint via
+presigned URLs.
+
+### Access by IP (no domain)
+
+Uploads go from the browser straight to MinIO, which is a different origin
+(`:3000` vs `:9000`). Without a domain, the `Origin` header is something like
+`http://192.168.1.10:3000`, and MinIO will reject the PUT unless that origin is
+allowed.
+
+```bash
+./scripts/setup-env.sh --lan            # detect LAN IP, set URLs, CORS=*
+./scripts/setup-env.sh --lan --host 192.168.1.10
+```
+
+Or set it yourself:
+
+```bash
+PUBLIC_BASE_URL=http://192.168.1.10:3000
+PUBLIC_STORAGE_URL=http://192.168.1.10:9000
+CORS_ALLOW_ORIGIN=*
+```
+
+`CORS_ALLOW_ORIGIN=*` is the LAN flag. Do not use it on the public internet —
+lock MinIO back to `PUBLIC_BASE_URL` (leave the variable empty) once you have a
+real domain.
 
 ---
 
@@ -192,7 +216,8 @@ pnpm install
 # Postgres + MinIO only
 docker compose up -d postgres minio minio-init
 
-cp .env.example .env    # point DATABASE_URL/S3_ENDPOINT at localhost
+./scripts/setup-env.sh  # or cp .env.example .env and edit
+# point DATABASE_URL / S3_ENDPOINT at localhost for `pnpm dev`
 pnpm db:migrate
 
 pnpm dev          # web on :3000
@@ -249,7 +274,8 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 |---|---|---|
 | `PUBLIC_BASE_URL` | — | Public origin of the app. Builds share links. |
 | `PUBLIC_STORAGE_URL` | — | Public origin of MinIO. Browsers hit this directly. |
-| `SESSION_SECRET` | — | `openssl rand -hex 32`. Signs member cookies. |
+| `CORS_ALLOW_ORIGIN` | `PUBLIC_BASE_URL` | MinIO + Socket.IO allowed Origin. Set `*` for IP / no-domain access. |
+| `SESSION_SECRET` | — | `openssl rand -hex 32`. Signs member cookies. (`setup-env.sh` generates this.) |
 | `MAX_UPLOAD_MB` | `2048` | Per-file upload limit. |
 | `RENDER_HEIGHT` / `RENDER_FPS` | `1080` / `30` | Output resolution. |
 | `RENDER_CONCURRENCY` | `1` | Raise only if the host has CPU to spare. |
