@@ -458,7 +458,7 @@ async function fail(renderJobId: string, vlogId: string, message: string): Promi
     .where(eq(renderJobs.id, renderJobId));
 
   // Drop back to the editor so it can be fixed and retried.
-  await db.update(vlogs).set({ state: "edit" }).where(eq(vlogs.id, vlogId));
+  await db.update(vlogs).set({ state: "open" }).where(eq(vlogs.id, vlogId));
 
   await notifyRenderProgress(vlogId, {
     renderJobId,

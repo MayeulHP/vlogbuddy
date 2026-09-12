@@ -1,7 +1,7 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
-import { createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { env } from "./env";
 
@@ -15,6 +15,8 @@ function s3() {
       endpoint: e.S3_ENDPOINT,
       forcePathStyle: true,
       credentials: { accessKeyId: e.S3_ACCESS_KEY, secretAccessKey: e.S3_SECRET_KEY },
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
     });
   }
   return client;
@@ -41,6 +43,31 @@ export async function uploadFile(
       ContentType: contentType,
     }),
   );
+}
+
+/**
+ * Streams a file straight from disk into storage.
+ *
+ * `uploadFile` reads the whole thing into memory first, which is fine for a
+ * thumbnail and reckless for the 3GB video somebody just pulled out of Immich.
+ * S3 accepts a stream as long as we tell it the length up front.
+ */
+export async function uploadFileStreaming(
+  key: string,
+  filePath: string,
+  contentType: string,
+): Promise<number> {
+  const { size } = await stat(filePath);
+  await s3().send(
+    new PutObjectCommand({
+      Bucket: env().S3_BUCKET,
+      Key: key,
+      Body: createReadStream(filePath),
+      ContentLength: size,
+      ContentType: contentType,
+    }),
+  );
+  return size;
 }
 
 export function buildStorageKey(

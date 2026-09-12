@@ -1,19 +1,22 @@
 "use client";
 
 import { useEffect } from "react";
-import type { ReactionTier } from "@vlogbuddy/shared";
+import { formatDuration, type ReactionTier } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { ReactionBar } from "./reaction-bar";
 
+/** One frame, enlarged, with its slate and the crew's marks. */
 export function Lightbox({
   item,
   slug,
   tiers,
+  crew,
   onClose,
 }: {
   item: MediaItemView;
   slug: string;
   tiers: ReactionTier[];
+  crew?: number;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -29,46 +32,48 @@ export function Lightbox({
   const src = item.kind === "video" ? item.proxyUrl ?? item.originalUrl : item.originalUrl;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex animate-fade-in flex-col bg-black/92 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div className="flex items-center justify-between px-4 py-3">
+    <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950/97" onClick={onClose}>
+      <header className="flex items-end justify-between gap-4 border-b border-[color:var(--hair-dark)] px-4 py-3 sm:px-6">
         <div className="min-w-0">
-          <p className="truncate text-sm text-white">{item.originalFilename}</p>
-          {item.uploaderName && (
-            <p className="text-xs text-ink-500">Added by {item.uploaderName}</p>
-          )}
+          <p className="eyebrow-light">
+            {item.uploaderName ? `Shot by ${item.uploaderName}` : "Unattributed"}
+            {item.kind === "video" && ` · ${formatDuration(item.durationSeconds)}`}
+          </p>
+          <p className="timecode mt-0.5 truncate text-sm text-paper-100">
+            {item.originalFilename}
+          </p>
         </div>
-        <button onClick={onClose} className="btn-ghost text-lg" aria-label="Close">
-          ✕
+        <button onClick={onClose} className="btn-outline-dark shrink-0" aria-label="Close">
+          Close
         </button>
-      </div>
+      </header>
 
       <div
-        className="flex flex-1 items-center justify-center px-4 pb-4"
+        className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6"
         onClick={(e) => e.stopPropagation()}
       >
         {src ? (
           item.kind === "video" ? (
-            <video
-              src={src}
-              controls
-              autoPlay
-              playsInline
-              className="max-h-full max-w-full rounded-lg"
-            />
+            <video src={src} controls autoPlay playsInline className="max-h-full max-w-full" />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={item.originalFilename} className="max-h-full max-w-full rounded-lg object-contain" />
+            <img
+              src={src}
+              alt={item.originalFilename}
+              className="print-tone max-h-full max-w-full object-contain"
+            />
           )
         ) : (
-          <p className="text-sm text-ink-500">Still processing…</p>
+          <p className="font-mono text-2xs uppercase tracking-label text-ink-500">Developing…</p>
         )}
       </div>
 
-      <div className="flex justify-center pb-6" onClick={(e) => e.stopPropagation()}>
-        <div className="rounded-full border border-white/10 bg-black/60 px-3 py-2">
+      <footer
+        className="flex justify-center border-t border-[color:var(--hair-dark)] px-4 py-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3">
+          <span className="eyebrow-light">Your mark</span>
           <ReactionBar
             slug={slug}
             targetType="media"
@@ -76,9 +81,11 @@ export function Lightbox({
             tiers={tiers}
             mine={item.reactions.mine}
             breakdown={item.reactions.breakdown}
+            crew={crew}
+            tone="dark"
           />
         </div>
-      </div>
+      </footer>
     </div>
   );
 }

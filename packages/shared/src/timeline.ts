@@ -115,6 +115,54 @@ export function clipStartTimes(
   return starts;
 }
 
+/**
+ * The cut, as decided on the Gather page: which media are in, and in what
+ * order. Reconciling turns that list into clips without throwing away work —
+ * a clip that survives keeps its trims, titles, volume and transition.
+ */
+export interface CutEntry {
+  mediaItemId: string;
+  kind: "photo" | "video";
+  durationSeconds: number | null;
+}
+
+export function defaultClipFor(entry: CutEntry): Clip {
+  const isVideo = entry.kind === "video";
+  return {
+    id: globalThis.crypto.randomUUID(),
+    mediaItemId: entry.mediaItemId,
+    kind: entry.kind,
+    trimStart: 0,
+    trimEnd: isVideo ? entry.durationSeconds : null,
+    duration: isVideo ? entry.durationSeconds ?? 5 : DEFAULT_PHOTO_DURATION,
+    transitionIn: "cut",
+    transitionDuration: DEFAULT_TRANSITION_DURATION,
+    volume: 1,
+    muted: false,
+    titles: [],
+  };
+}
+
+/**
+ * Rebuilds `clips` to match `cut`, reusing the existing clip for any media that
+ * is still in. Returns the *same object* when nothing would change, so callers
+ * can skip a write and avoid churning revisions on every vote.
+ */
+export function reconcileClips(doc: TimelineDoc, cut: CutEntry[]): TimelineDoc {
+  const existing = new Map<string, Clip>();
+  for (const clip of doc.clips) {
+    if (!existing.has(clip.mediaItemId)) existing.set(clip.mediaItemId, clip);
+  }
+
+  const clips = cut.map((entry) => existing.get(entry.mediaItemId) ?? defaultClipFor(entry));
+
+  const unchanged =
+    clips.length === doc.clips.length && clips.every((clip, i) => clip === doc.clips[i]);
+  if (unchanged) return doc;
+
+  return { ...doc, clips, updatedAt: new Date().toISOString() };
+}
+
 // --- Editor operations ------------------------------------------------------
 // Broadcast over Socket.IO. The server applies them to the stored doc and
 // rebroadcasts, so everyone converges (last-writer-wins per element in v1).

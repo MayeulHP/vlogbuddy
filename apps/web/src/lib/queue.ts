@@ -10,6 +10,8 @@ import { env } from "./env";
 export const QUEUE_PROCESS_MEDIA = "process-media";
 export const QUEUE_EXTRACT_AUDIO = "extract-audio";
 export const QUEUE_RENDER = "render-vlog";
+export const QUEUE_IMMICH_IMPORT = "immich-import";
+export const QUEUE_IMMICH_EXPORT = "immich-export";
 
 export interface ProcessMediaJob {
   mediaItemId: string;
@@ -24,6 +26,23 @@ export interface ExtractAudioJob {
 export interface RenderJobPayload {
   renderJobId: string;
   vlogId: string;
+}
+
+export interface ImmichImportJob {
+  transferId: string;
+  vlogId: string;
+  memberId: string;
+  albumId: string;
+  albumName: string;
+  /** Empty means the whole album. */
+  assetIds: string[];
+}
+
+export interface ImmichExportJob {
+  transferId: string;
+  vlogId: string;
+  memberId: string;
+  albumName: string;
 }
 
 let boss: PgBoss | null = null;
@@ -43,7 +62,13 @@ async function getBoss(): Promise<PgBoss> {
 
       // pg-boss v10 drops jobs sent to queues that don't exist yet. The worker
       // creates these too, but whichever process starts first must win.
-      for (const queue of [QUEUE_PROCESS_MEDIA, QUEUE_EXTRACT_AUDIO, QUEUE_RENDER]) {
+      for (const queue of [
+        QUEUE_PROCESS_MEDIA,
+        QUEUE_EXTRACT_AUDIO,
+        QUEUE_RENDER,
+        QUEUE_IMMICH_IMPORT,
+        QUEUE_IMMICH_EXPORT,
+      ]) {
         try {
           await instance.createQueue(queue);
         } catch (err) {
@@ -86,5 +111,29 @@ export async function enqueueRender(job: RenderJobPayload) {
     expireInMinutes: 360,
     // One render at a time per vlog.
     singletonKey: job.vlogId,
+  });
+}
+
+/**
+ * Immich copies talk to somebody else's server over the internet, so they get
+ * a long expiry and only one retry — a half-finished import is resumable by
+ * pressing the button again (already-copied assets are skipped by checksum),
+ * which is friendlier than a silent retry storm against their instance.
+ */
+export async function enqueueImmichImport(job: ImmichImportJob) {
+  const b = await getBoss();
+  return b.send(QUEUE_IMMICH_IMPORT, job, {
+    retryLimit: 1,
+    expireInMinutes: 360,
+    singletonKey: `immich-import:${job.memberId}`,
+  });
+}
+
+export async function enqueueImmichExport(job: ImmichExportJob) {
+  const b = await getBoss();
+  return b.send(QUEUE_IMMICH_EXPORT, job, {
+    retryLimit: 1,
+    expireInMinutes: 360,
+    singletonKey: `immich-export:${job.memberId}`,
   });
 }

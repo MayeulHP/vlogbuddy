@@ -8,14 +8,20 @@ import type {
   ServerToClientEvents,
 } from "@vlogbuddy/shared";
 
-type VlogSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
+export type VlogSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
 /**
  * One socket per vlog. Keeps presence in state and hands the raw socket back so
  * feature components can subscribe to whatever events they care about.
+ *
+ * The socket is state, not a ref, and that matters: React runs child effects
+ * before the parent's, so a ref would still be null when a nested component
+ * tried to subscribe and it would silently never hear anything. Holding it in
+ * state re-renders the children the moment it exists, and their subscriptions
+ * bind for real.
  */
 export function useVlogSocket(vlogId: string) {
-  const socketRef = useRef<VlogSocket | null>(null);
+  const [socket, setSocket] = useState<VlogSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [presence, setPresence] = useState<PresenceMember[]>([]);
 
@@ -27,7 +33,7 @@ export function useVlogSocket(vlogId: string) {
       transports: ["websocket", "polling"],
     });
 
-    socketRef.current = socket;
+    setSocket(socket);
 
     socket.on("connect", () => setConnected(true));
     socket.on("disconnect", () => setConnected(false));
@@ -47,16 +53,21 @@ export function useVlogSocket(vlogId: string) {
     return () => {
       socket.removeAllListeners();
       socket.disconnect();
-      socketRef.current = null;
+      setSocket(null);
     };
   }, [vlogId]);
 
-  return { socket: socketRef, connected, presence };
+  return { socket, connected, presence };
 }
 
-/** Subscribe to a single server event for the lifetime of the component. */
+/**
+ * Subscribe to a single server event for the lifetime of the component.
+ *
+ * The handler is held in a ref so a fresh closure on every render doesn't tear
+ * the listener down and rebuild it — only the socket or the event name does.
+ */
 export function useSocketEvent<E extends keyof ServerToClientEvents>(
-  socketRef: React.MutableRefObject<VlogSocket | null>,
+  socket: VlogSocket | null,
   event: E,
   handler: ServerToClientEvents[E],
 ) {
@@ -64,7 +75,6 @@ export function useSocketEvent<E extends keyof ServerToClientEvents>(
   handlerRef.current = handler;
 
   useEffect(() => {
-    const socket = socketRef.current;
     if (!socket) return;
 
     const listener = (...args: unknown[]) => {
@@ -81,6 +91,5 @@ export function useSocketEvent<E extends keyof ServerToClientEvents>(
     return () => {
       emitter.off(event as string, listener);
     };
-    // socketRef is stable; re-bind only if the event name changes.
-  }, [socketRef, event]);
+  }, [socket, event]);
 }

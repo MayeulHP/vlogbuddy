@@ -1,96 +1,32 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, asc, db, eq, mediaItems, musicItems, renderJobs, selections, timelines, vlogs } from "@vlogbuddy/db";
+import { and, db, eq, mediaItems, renderJobs, timelines, vlogs } from "@vlogbuddy/db";
 import {
-  DEFAULT_PHOTO_DURATION,
   applyTimelineOp,
   emptyTimeline,
+  isWorkingState,
   timelineOpSchema,
-  type Clip,
-  type TimelineDoc,
 } from "@vlogbuddy/shared";
-import crypto from "node:crypto";
 import { requireCreator, requireMemberBySlug } from "../session";
 import { emitToVlog } from "../realtime";
+import { syncCut } from "../cut";
 import { enqueueRender } from "../queue";
 
 /**
- * Builds the first draft of the timeline from the curated selection, in the
- * order people agreed on. This is what makes the final cut low-effort: by the
- * time you open the editor, the vlog is already assembled.
+ * Rebuilds the timeline from the current cut. The cut engine keeps these in
+ * step automatically, so this is only a manual "put it back the way the votes
+ * want it" — handy after a lot of hand-editing.
  */
 export async function buildTimelineFromSelectionAction(slug: string) {
   try {
     const session = await requireMemberBySlug(slug);
-    requireCreator(session);
-
-    const selected = await db
-      .select({ selection: selections, media: mediaItems })
-      .from(selections)
-      .innerJoin(mediaItems, eq(selections.targetId, mediaItems.id))
-      .where(and(eq(selections.vlogId, session.vlog.id), eq(selections.targetType, "media")))
-      .orderBy(asc(selections.orderIndex));
-
-    if (selected.length === 0) {
-      return { ok: false as const, error: "Select some photos and videos first" };
+    const result = await syncCut(session.vlog.id, session.member.id);
+    if (result.clips === 0) {
+      return { ok: false as const, error: "Nothing is in the cut yet" };
     }
-
-    const clips: Clip[] = selected.map(({ media }) => ({
-      id: crypto.randomUUID(),
-      mediaItemId: media.id,
-      kind: media.kind === "video" ? "video" : "photo",
-      trimStart: 0,
-      trimEnd: media.kind === "video" ? media.durationSeconds ?? null : null,
-      duration: media.kind === "video" ? media.durationSeconds ?? 5 : DEFAULT_PHOTO_DURATION,
-      transitionIn: "cut",
-      transitionDuration: 0.5,
-      volume: 1,
-      muted: false,
-      titles: [],
-    }));
-
-    // Highest-voted selected track becomes the default music bed.
-    const [topMusic] = await db
-      .select({ music: musicItems })
-      .from(selections)
-      .innerJoin(musicItems, eq(selections.targetId, musicItems.id))
-      .where(and(eq(selections.vlogId, session.vlog.id), eq(selections.targetType, "music")))
-      .orderBy(asc(selections.orderIndex))
-      .limit(1);
-
-    const doc: TimelineDoc = {
-      version: 1,
-      clips,
-      audio: topMusic
-        ? [
-            {
-              musicItemId: topMusic.music.id,
-              mediaItemId: null,
-              offset: 0,
-              startAt: 0,
-              volume: 0.8,
-              fadeIn: 1,
-              fadeOut: 2,
-            },
-          ]
-        : [],
-      duckClipAudio: true,
-      updatedAt: new Date().toISOString(),
-    };
-
-    const [row] = await db
-      .insert(timelines)
-      .values({ vlogId: session.vlog.id, doc, revision: 1, updatedById: session.member.id })
-      .onConflictDoUpdate({
-        target: timelines.vlogId,
-        set: { doc, revision: 1, updatedAt: new Date(), updatedById: session.member.id },
-      })
-      .returning();
-
-    emitToVlog(session.vlog.id, "timeline:sync", { timeline: row.doc, revision: row.revision });
     revalidatePath(`/v/${slug}`, "layout");
-    return { ok: true as const, clips: clips.length };
+    return { ok: true as const, clips: result.clips };
   } catch (err) {
     return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't build timeline" };
   }
@@ -104,8 +40,8 @@ export async function applyTimelineOpAction(slug: string, op: unknown) {
   try {
     const session = await requireMemberBySlug(slug);
 
-    if (!["edit", "curate"].includes(session.vlog.state)) {
-      return { ok: false as const, error: "The timeline is locked in this phase" };
+    if (!isWorkingState(session.vlog.state)) {
+      return { ok: false as const, error: "This vlog is rendering — the timeline is locked" };
     }
 
     const parsed = timelineOpSchema.safeParse(op);
@@ -162,6 +98,9 @@ export async function startRenderAction(slug: string) {
     const session = await requireMemberBySlug(slug);
     requireCreator(session);
 
+    // Prune anything stale (deleted or unprocessable media) before snapshotting.
+    await syncCut(session.vlog.id, session.member.id);
+
     const [timeline] = await db
       .select()
       .from(timelines)
@@ -170,6 +109,24 @@ export async function startRenderAction(slug: string) {
 
     if (!timeline || timeline.doc.clips.length === 0) {
       return { ok: false as const, error: "There's nothing on the timeline yet" };
+    }
+
+    /**
+     * Rendering a clip whose source hasn't been processed yet produces a
+     * mystifying ffmpeg failure ten minutes in. Catch it here instead.
+     */
+    const sources = await db
+      .select({ id: mediaItems.id, status: mediaItems.status })
+      .from(mediaItems)
+      .where(eq(mediaItems.vlogId, session.vlog.id));
+    const readyIds = new Set(sources.filter((m) => m.status === "ready").map((m) => m.id));
+    const notReady = timeline.doc.clips.filter((c) => !readyIds.has(c.mediaItemId)).length;
+
+    if (notReady > 0) {
+      return {
+        ok: false as const,
+        error: `${notReady} clip${notReady === 1 ? " is" : "s are"} still processing — give it a moment and try again`,
+      };
     }
 
     const [existing] = await db

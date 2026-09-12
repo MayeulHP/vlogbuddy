@@ -1,5 +1,9 @@
 import { getSqlClient } from "@vlogbuddy/db";
-import type { MediaReadyPayload, RenderProgressPayload } from "@vlogbuddy/shared";
+import type {
+  ImmichTransferPayload,
+  MediaReadyPayload,
+  RenderProgressPayload,
+} from "@vlogbuddy/shared";
 
 /**
  * The worker is a separate process, so it can't reach the web app's Socket.IO
@@ -11,7 +15,14 @@ export const NOTIFY_CHANNEL = "vlogbuddy_events";
 
 type WorkerEvent =
   | { type: "media:updated"; vlogId: string; payload: MediaReadyPayload }
-  | { type: "render:progress"; vlogId: string; payload: RenderProgressPayload };
+  | { type: "render:progress"; vlogId: string; payload: RenderProgressPayload }
+  | { type: "immich:transfer"; vlogId: string; payload: ImmichTransferPayload }
+  /**
+   * Not a browser event: the web process intercepts this one and re-runs the
+   * cut engine. The worker can't do it itself — the engine lives in the web
+   * app — and media that appeared without it would never join the cut.
+   */
+  | { type: "cut:resync"; vlogId: string; payload: { memberId: string } };
 
 async function publish(event: WorkerEvent): Promise<void> {
   try {
@@ -30,6 +41,18 @@ export async function notifyMediaUpdated(
   payload: MediaReadyPayload,
 ): Promise<void> {
   await publish({ type: "media:updated", vlogId, payload });
+}
+
+export async function notifyImmichTransfer(
+  vlogId: string,
+  payload: ImmichTransferPayload,
+): Promise<void> {
+  await publish({ type: "immich:transfer", vlogId, payload });
+}
+
+/** Asks the web process to rebuild the cut after media appeared out of band. */
+export async function notifyCutResync(vlogId: string, memberId: string): Promise<void> {
+  await publish({ type: "cut:resync", vlogId, payload: { memberId } });
 }
 
 export async function notifyRenderProgress(

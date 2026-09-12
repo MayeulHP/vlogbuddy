@@ -5,10 +5,12 @@ import { and, db, eq, mediaItems, pendingUploads, sql } from "@vlogbuddy/db";
 import {
   completeUploadSchema,
   kindForMimeType,
+  isWorkingState,
   presignUploadSchema,
   slugifyFilename,
 } from "@vlogbuddy/shared";
 import { requireMemberBySlug } from "../session";
+import { syncCut } from "../cut";
 import { buildStorageKey, deleteObject, headObject, presignUpload } from "../storage";
 import { enqueueProcessMedia } from "../queue";
 import { emitToVlog } from "../realtime";
@@ -27,8 +29,8 @@ export async function presignUploadAction(
   try {
     const session = await requireMemberBySlug(slug);
 
-    if (session.vlog.state !== "open") {
-      return { ok: false as const, error: "This vlog is no longer accepting uploads" };
+    if (!isWorkingState(session.vlog.state)) {
+      return { ok: false as const, error: "This vlog is rendering — uploads are closed" };
     }
 
     const parsed = presignUploadSchema.safeParse(input);
@@ -125,6 +127,9 @@ export async function completeUploadAction(
     // The worker fills in thumbnail, proxy, dimensions and real capture time.
     await enqueueProcessMedia({ mediaItemId: item.id, vlogId: session.vlog.id });
 
+    // Straight into the cut, so it shows up in the final timeline immediately.
+    await syncCut(session.vlog.id, session.member.id);
+
     emitToVlog(session.vlog.id, "media:added", { mediaItemId: item.id });
     revalidatePath(`/v/${slug}`);
 
@@ -158,6 +163,9 @@ export async function deleteMediaAction(slug: string, mediaItemId: string) {
         .filter((k): k is string => Boolean(k))
         .map((k) => deleteObject(k).catch(() => {})),
     );
+
+    // Drops any clip that pointed at it — a dangling clip would break the render.
+    await syncCut(session.vlog.id, session.member.id);
 
     emitToVlog(session.vlog.id, "media:removed", { mediaItemId });
     revalidatePath(`/v/${slug}`);

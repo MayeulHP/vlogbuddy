@@ -112,8 +112,8 @@ export function PreviewPlayer({
 
   if (timeline.clips.length === 0) {
     return (
-      <div className="flex aspect-video items-center justify-center rounded-xl border border-ink-800 bg-ink-900">
-        <p className="text-sm text-ink-600">Nothing to preview yet</p>
+      <div className="flex aspect-video items-center justify-center border border-[color:var(--hair-dark)] bg-ink-950 bg-hatch">
+        <p className="eyebrow-light">No picture yet</p>
       </div>
     );
   }
@@ -125,7 +125,7 @@ export function PreviewPlayer({
     : null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-ink-800 bg-black">
+    <div className="border border-[color:var(--hair-dark)] bg-ink-950">
       <div className="relative aspect-video bg-black">
         {src ? (
           active?.clip.kind === "video" ? (
@@ -148,8 +148,8 @@ export function PreviewPlayer({
             <img src={src} alt="" className="h-full w-full object-contain" />
           )
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-ink-600">
-            Still processing…
+          <div className="flex h-full items-center justify-center font-mono text-2xs uppercase tracking-label text-ink-500">
+            Developing…
           </div>
         )}
 
@@ -184,17 +184,19 @@ export function PreviewPlayer({
       </div>
 
       {/* Transport */}
-      <div className="flex items-center gap-3 border-t border-ink-800 bg-ink-900 px-3 py-2">
+      <div className="flex items-center gap-3 border-t border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
         <button
           onClick={() => setPlaying((p) => !p)}
-          className="btn-ghost px-2 py-1 text-base"
+          className="shrink-0 border border-[color:var(--hair-dark)] px-2 py-1 font-mono text-[11px] text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
           aria-label={playing ? "Pause" : "Play"}
         >
-          {playing ? "⏸" : "▶"}
+          {playing ? "❙❙" : "▶"}
         </button>
 
-        <span className="shrink-0 text-[11px] tabular-nums text-ink-400">
-          {formatDuration(playheadTime)} / {formatDuration(total)}
+        <span className="timecode shrink-0 text-2xs text-ink-300">
+          {formatDuration(playheadTime)}
+          <span className="mx-1 text-ink-500">/</span>
+          {formatDuration(total)}
         </span>
 
         <input
@@ -204,15 +206,16 @@ export function PreviewPlayer({
           step={0.05}
           value={playheadTime}
           onChange={(e) => seek(Number(e.target.value))}
-          className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+          className="slider slider-dark flex-1"
+          aria-label="Playhead"
         />
 
         {active && (
           <button
             onClick={() => onSelectClip(active.clip.id)}
-            className="shrink-0 text-[11px] text-ink-500 hover:text-ink-300"
+            className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-400 transition-colors hover:text-paper-100"
           >
-            Clip {active.index + 1}
+            Shot {String(active.index + 1).padStart(2, "0")}
           </button>
         )}
       </div>

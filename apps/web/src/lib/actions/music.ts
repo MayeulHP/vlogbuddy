@@ -5,12 +5,14 @@ import { and, db, eq, musicItems } from "@vlogbuddy/db";
 import {
   addMusicSchema,
   canExtractAudio,
+  isWorkingState,
   moveMusicSchema,
   oembedEndpoint,
   parseMusicLink,
 } from "@vlogbuddy/shared";
 import { requireMemberBySlug } from "../session";
 import { emitToVlog } from "../realtime";
+import { syncCut } from "../cut";
 import { enqueueExtractAudio } from "../queue";
 import { env } from "../env";
 
@@ -44,8 +46,8 @@ export async function addMusicAction(
   try {
     const session = await requireMemberBySlug(slug);
 
-    if (session.vlog.state !== "open") {
-      return { ok: false as const, error: "This vlog is no longer accepting music" };
+    if (!isWorkingState(session.vlog.state)) {
+      return { ok: false as const, error: "This vlog is rendering — the soundtrack is locked" };
     }
 
     const parsed = addMusicSchema.safeParse({
@@ -97,6 +99,9 @@ export async function addMusicAction(
       })
       .returning();
 
+    // The first track added becomes the music bed on its own.
+    await syncCut(session.vlog.id, session.member.id);
+
     emitToVlog(session.vlog.id, "music:added", { musicItemId: item.id });
     revalidatePath(`/v/${slug}`);
 
@@ -127,6 +132,9 @@ export async function moveMusicAction(
         ),
       );
 
+    // Dragging the bed along the lane moves where it kicks in.
+    await syncCut(session.vlog.id, session.member.id, { resyncBedStart: true });
+
     emitToVlog(session.vlog.id, "music:moved", {
       musicItemId: parsed.data.musicItemId,
       timelinePosition: parsed.data.timelinePosition,
@@ -154,6 +162,9 @@ export async function deleteMusicAction(slug: string, musicItemId: string) {
     if (!canDelete) return { ok: false as const, error: "You can only remove tracks you added" };
 
     await db.delete(musicItems).where(eq(musicItems.id, musicItemId));
+
+    // Hands the bed to the next-best track if this one was it.
+    await syncCut(session.vlog.id, session.member.id);
 
     emitToVlog(session.vlog.id, "music:removed", { musicItemId });
     revalidatePath(`/v/${slug}`);

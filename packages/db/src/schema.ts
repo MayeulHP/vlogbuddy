@@ -15,16 +15,10 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-import type { ReactionTier } from "@vlogbuddy/shared";
+import type { CutOverride, ReactionTier } from "@vlogbuddy/shared";
 import type { TimelineDoc } from "@vlogbuddy/shared";
 
-export const vlogStateEnum = pgEnum("vlog_state", [
-  "open",
-  "curate",
-  "edit",
-  "export",
-  "published",
-]);
+export const vlogStateEnum = pgEnum("vlog_state", ["open", "export", "published"]);
 export const mediaKindEnum = pgEnum("media_kind", ["photo", "video", "audio"]);
 export const musicSourceEnum = pgEnum("music_source", ["youtube", "spotify", "deezer"]);
 export const processingStatusEnum = pgEnum("processing_status", [
@@ -40,6 +34,14 @@ export const renderStatusEnum = pgEnum("render_status", [
   "failed",
 ]);
 export const memberRoleEnum = pgEnum("member_role", ["creator", "friend"]);
+export const cutOverrideEnum = pgEnum("cut_override", ["include", "exclude"]);
+export const transferDirectionEnum = pgEnum("transfer_direction", ["import", "export"]);
+export const transferStatusEnum = pgEnum("transfer_status", [
+  "queued",
+  "running",
+  "done",
+  "failed",
+]);
 export const targetTypeEnum = pgEnum("target_type", ["media", "music"]);
 
 // --- vlogs ------------------------------------------------------------------
@@ -54,6 +56,11 @@ export const vlogs = pgTable(
     shareSlug: text("share_slug").notNull().unique(),
     passcodeHash: text("passcode_hash"),
     state: vlogStateEnum("state").notNull().default("open"),
+    /**
+     * Dump-view cut line. Media whose rank is at or above this value are the
+     * pre-curated running order (chronological).
+     */
+    scoreThreshold: real("score_threshold").notNull().default(0),
     /** Customisable three-tier emoji scale. */
     reactionTiers: jsonb("reaction_tiers").$type<ReactionTier[]>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -117,12 +124,112 @@ export const mediaItems = pgTable(
     status: processingStatusEnum("status").notNull().default("pending"),
     error: text("error"),
 
+    /**
+     * Manual veto of the cut line. `null` means "whatever the votes say";
+     * `include`/`exclude` mean a human decided and the line no longer applies.
+     */
+    cutOverride: cutOverrideEnum("cut_override").$type<CutOverride>(),
+
+    /**
+     * Base64 SHA-1 of the file. Immich uses the same hash, which is what lets
+     * us hand a vlog's media to somebody else's instance without re-uploading
+     * the half of it they already have. Filled by the worker for browser
+     * uploads, and copied straight from the asset for Immich imports.
+     */
+    checksumSha1: text("checksum_sha1"),
+    /** Where this came from, when it came from somebody's Immich. */
+    immichAssetId: text("immich_asset_id"),
+    immichAlbumName: text("immich_album_name"),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     vlogIdx: index("media_items_vlog_id_idx").on(t.vlogId),
     chronoIdx: index("media_items_chrono_idx").on(t.vlogId, t.capturedAt, t.uploadIndex),
     statusIdx: index("media_items_status_idx").on(t.status),
+    checksumIdx: index("media_items_checksum_idx").on(t.vlogId, t.checksumSha1),
+  }),
+);
+
+// --- immich -----------------------------------------------------------------
+
+/**
+ * One person's Immich server, as connected from inside one vlog.
+ *
+ * Scoped to a member rather than a person, because there are no accounts here —
+ * a member *is* the identity. It also means the key disappears with the vlog,
+ * which is the right default for a credential this powerful.
+ */
+export const immichConnections = pgTable(
+  "immich_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vlogId: uuid("vlog_id")
+      .notNull()
+      .references(() => vlogs.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+
+    baseUrl: text("base_url").notNull(),
+    /** AES-256-GCM sealed with a key derived from SESSION_SECRET. */
+    apiKeyCipher: text("api_key_cipher").notNull(),
+    /** Shown as "connected as ..."; never used for auth. */
+    immichUserId: text("immich_user_id"),
+    immichUserName: text("immich_user_name"),
+    /** Last four characters of the key, so people can tell which one is saved. */
+    keyHint: text("key_hint"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => ({
+    memberUnique: unique("immich_connections_member_unique").on(t.memberId),
+    vlogIdx: index("immich_connections_vlog_idx").on(t.vlogId),
+  }),
+);
+
+/**
+ * A bulk copy in either direction: pulling an album out of somebody's Immich
+ * into the vlog, or pushing the whole pile back into somebody else's.
+ *
+ * One table for both because the UI shows them the same way — a labelled
+ * progress bar that survives a page reload.
+ */
+export const immichTransfers = pgTable(
+  "immich_transfers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vlogId: uuid("vlog_id")
+      .notNull()
+      .references(() => vlogs.id, { onDelete: "cascade" }),
+    memberId: uuid("member_id")
+      .notNull()
+      .references(() => members.id, { onDelete: "cascade" }),
+
+    direction: transferDirectionEnum("direction").notNull(),
+    /** Album name — what the person will recognise it by. */
+    label: text("label").notNull(),
+
+    total: integer("total").notNull().default(0),
+    done: integer("done").notNull().default(0),
+    /** Already present at the destination; counted, not copied. */
+    skipped: integer("skipped").notNull().default(0),
+    failed: integer("failed").notNull().default(0),
+
+    status: transferStatusEnum("status").notNull().default("queued"),
+    message: text("message"),
+    error: text("error"),
+    /** Album created on the far side by an export. */
+    remoteAlbumId: text("remote_album_id"),
+
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => ({
+    vlogIdx: index("immich_transfers_vlog_idx").on(t.vlogId, t.createdAt),
+    memberIdx: index("immich_transfers_member_idx").on(t.memberId),
   }),
 );
 
@@ -153,6 +260,9 @@ export const musicItems = pgTable(
     audioDurationSeconds: doublePrecision("audio_duration_seconds"),
     status: processingStatusEnum("status").notNull().default("pending"),
     error: text("error"),
+
+    /** Same veto as media: keep a track out of the cut regardless of votes. */
+    cutOverride: cutOverrideEnum("cut_override").$type<CutOverride>(),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -302,6 +412,10 @@ export const membersRelations = relations(members, ({ one, many }) => ({
   vlog: one(vlogs, { fields: [members.vlogId], references: [vlogs.id] }),
   mediaItems: many(mediaItems),
   reactions: many(reactions),
+  immichConnection: one(immichConnections, {
+    fields: [members.id],
+    references: [immichConnections.memberId],
+  }),
 }));
 
 export const mediaItemsRelations = relations(mediaItems, ({ one }) => ({
@@ -337,3 +451,6 @@ export type Selection = typeof selections.$inferSelect;
 export type Timeline = typeof timelines.$inferSelect;
 export type RenderJob = typeof renderJobs.$inferSelect;
 export type PendingUpload = typeof pendingUploads.$inferSelect;
+export type ImmichConnection = typeof immichConnections.$inferSelect;
+export type NewImmichConnection = typeof immichConnections.$inferInsert;
+export type ImmichTransfer = typeof immichTransfers.$inferSelect;

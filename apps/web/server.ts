@@ -9,6 +9,7 @@ import { parse } from "node:url";
 import {
   applyTimelineOp,
   colorForMember,
+  isWorkingState,
   roomForVlog,
   timelineOpSchema,
   emptyTimeline,
@@ -17,6 +18,7 @@ import {
   type ServerToClientEvents,
 } from "@vlogbuddy/shared";
 import { and, db, eq, getSqlClient, members, timelines, vlogs } from "@vlogbuddy/db";
+import { syncCut } from "./src/lib/cut-core";
 import crypto from "node:crypto";
 
 const NOTIFY_CHANNEL = "vlogbuddy_events";
@@ -36,6 +38,23 @@ async function bridgeWorkerEvents(io: SocketServer) {
           vlogId: string;
           payload: unknown;
         };
+
+        /**
+         * The worker can add media (an Immich import), but the cut engine
+         * lives here. This event asks us to rebuild the running order; the
+         * engine broadcasts `timeline:sync` itself if anything moved.
+         */
+        if (event.type === "cut:resync") {
+          const { memberId } = event.payload as { memberId: string };
+          void syncCut(event.vlogId, memberId, {
+            onTimelineSync: (sync) =>
+              io.to(roomForVlog(event.vlogId)).emit("timeline:sync", sync),
+          }).catch((err) => {
+            console.error("[bridge] cut resync failed:", err);
+          });
+          return;
+        }
+
         io.to(roomForVlog(event.vlogId)).emit(event.type as never, event.payload as never);
       } catch (err) {
         console.warn("[bridge] bad payload:", err);
@@ -196,8 +215,8 @@ async function main() {
         }
 
         const [vlog] = await db.select().from(vlogs).where(eq(vlogs.id, vlogId)).limit(1);
-        if (!vlog || !["edit", "curate"].includes(vlog.state)) {
-          ack?.({ ok: false, error: "The timeline is locked in this phase" });
+        if (!vlog || !isWorkingState(vlog.state)) {
+          ack?.({ ok: false, error: "This vlog is rendering — the timeline is locked" });
           return;
         }
 

@@ -40,7 +40,11 @@ const cookieName = (vlogId: string) => `${COOKIE_PREFIX}${vlogId.replace(/-/g, "
 
 export async function setSessionCookie(vlogId: string, sessionToken: string) {
   const store = await cookies();
-  const secure = env().PUBLIC_BASE_URL.startsWith("https://");
+  // LAN / IP access is http; a Secure cookie would never be stored.
+  const secure =
+    process.env.CORS_ALLOW_ORIGIN === "*"
+      ? false
+      : env().PUBLIC_BASE_URL.startsWith("https://");
   store.set(cookieName(vlogId), sign(sessionToken), {
     httpOnly: true,
     sameSite: "lax",

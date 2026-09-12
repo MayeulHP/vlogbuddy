@@ -109,7 +109,7 @@ export function UploadZone({ slug, onUploaded }: { slug: string; onUploaded?: ()
   const failed = tasks.filter((t) => t.status === "error");
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -123,10 +123,10 @@ export function UploadZone({ slug, onUploaded }: { slug: string; onUploaded?: ()
         }}
         onClick={() => inputRef.current?.click()}
         className={cn(
-          "cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-all",
+          "relative flex min-h-[124px] cursor-pointer flex-col items-center justify-center border border-dashed px-6 py-8 text-center transition-colors",
           dragging
-            ? "border-brand-400 bg-brand-500/10"
-            : "border-ink-700 bg-ink-900/40 hover:border-ink-600 hover:bg-ink-900/70",
+            ? "border-signal-600 bg-signal-100"
+            : "border-[color:var(--hair-strong)] bg-paper-200 bg-hatch hover:border-ink-900 hover:bg-paper-300",
         )}
       >
         <input
@@ -140,28 +140,36 @@ export function UploadZone({ slug, onUploaded }: { slug: string; onUploaded?: ()
             e.target.value = "";
           }}
         />
-        <div className="text-2xl">{dragging ? "📥" : "📸"}</div>
-        <p className="mt-2 text-sm font-medium text-white">
-          {dragging ? "Drop them here" : "Drop photos & videos, or click to pick"}
+
+        {/* Corner ticks, so the drop target reads as a frame to fill. */}
+        <span aria-hidden className="pointer-events-none absolute inset-2 crop-marks" />
+
+        <p
+          className={cn(
+            "headline text-[1.9rem]",
+            dragging ? "text-signal-700" : "text-ink-900",
+          )}
+        >
+          {dragging ? "Let go." : "Drop the footage here"}
         </p>
-        <p className="mt-0.5 text-xs text-ink-500">
-          They go straight into the shared pile. Audio files work too.
+        <p className="mt-1.5 font-mono text-2xs uppercase tracking-label text-ink-500">
+          Photos · Video · Audio &nbsp;·&nbsp; or click to pick
         </p>
       </div>
 
       {(active.length > 0 || failed.length > 0) && (
-        <div className="space-y-1.5">
+        <div className="divide-y divide-[color:var(--hair)] border border-[color:var(--hair)] bg-paper-50">
           {active.map((task) => (
-            <div key={task.id} className="card px-3 py-2">
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="truncate text-ink-200">{task.name}</span>
-                <span className="shrink-0 tabular-nums text-ink-500">
+            <div key={task.id} className="px-3 py-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="timecode truncate text-xs text-ink-800">{task.name}</span>
+                <span className="timecode shrink-0 text-2xs text-ink-500">
                   {task.progress}% · {formatBytes(task.size)}
                 </span>
               </div>
-              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-ink-800">
+              <div className="mt-1.5 h-[3px] bg-paper-300">
                 <div
-                  className="h-full rounded-full bg-brand-500 transition-all duration-200"
+                  className="h-full bg-signal-600 transition-all duration-200"
                   style={{ width: `${task.progress}%` }}
                 />
               </div>
@@ -171,14 +179,14 @@ export function UploadZone({ slug, onUploaded }: { slug: string; onUploaded?: ()
           {failed.map((task) => (
             <div
               key={task.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs"
+              className="flex items-baseline justify-between gap-3 bg-signal-100 px-3 py-2"
             >
-              <span className="truncate text-red-300">
+              <span className="truncate font-mono text-2xs text-signal-800">
                 {task.name} — {task.error}
               </span>
               <button
                 onClick={() => setTasks((prev) => prev.filter((t) => t.id !== task.id))}
-                className="shrink-0 text-red-400 hover:text-red-200"
+                className="shrink-0 font-mono text-2xs text-signal-700 hover:text-signal-900"
               >
                 ✕
               </button>

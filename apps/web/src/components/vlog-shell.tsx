@@ -1,25 +1,28 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RenderJob } from "@vlogbuddy/db";
 import {
   VLOG_STATES,
   VLOG_STATE_LABELS,
+  isWorkingState,
   type ReactionTier,
   type TimelineDoc,
   type VlogState,
+  type WorkspaceTab,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
+import type { PublicImmichConnection } from "@/lib/immich";
 import { useSocketEvent, useVlogSocket } from "@/hooks/use-vlog-socket";
 import { cn } from "@/lib/cn";
-import { DumpView } from "./dump/dump-view";
-import { CurateView } from "./curate/curate-view";
+import { GatherView } from "./gather/gather-view";
 import { EditorView } from "./editor/editor-view";
 import { RenderView } from "./render/render-view";
 import { ShareBar } from "./share-bar";
-import { PhaseNav } from "./phase-nav";
+import { WorkspaceNav } from "./workspace-nav";
 import { PresenceBar } from "./presence-bar";
+import { Wordmark } from "./brand";
 
 export interface VlogShellProps {
   vlog: {
@@ -28,6 +31,7 @@ export interface VlogShellProps {
     description: string | null;
     shareSlug: string;
     state: VlogState;
+    scoreThreshold: number;
   };
   member: { id: string; displayName: string; role: "creator" | "friend" };
   members: { id: string; displayName: string; role: "creator" | "friend" }[];
@@ -40,6 +44,7 @@ export interface VlogShellProps {
   publishedRender: (RenderJob & { url: string; downloadUrl: string }) | null;
   shareUrl: string;
   ytAudioEnabled: boolean;
+  immichConnection: PublicImmichConnection | null;
 }
 
 export function VlogShell(props: VlogShellProps) {
@@ -47,6 +52,7 @@ export function VlogShell(props: VlogShellProps) {
   const router = useRouter();
   const { socket, connected, presence } = useVlogSocket(vlog.id);
   const [state, setState] = useState<VlogState>(vlog.state);
+  const [tab, setTab] = useTabPreference(vlog.shareSlug, vlog.state);
 
   useEffect(() => setState(vlog.state), [vlog.state]);
 
@@ -64,6 +70,10 @@ export function VlogShell(props: VlogShellProps) {
   useSocketEvent(socket, "reaction:updated", refresh);
   useSocketEvent(socket, "selection:updated", refresh);
   useSocketEvent(socket, "selection:reordered", refresh);
+  useSocketEvent(socket, "music:moved", refresh);
+  useSocketEvent(socket, "vlog:threshold", refresh);
+  // The cut engine rebuilds the timeline whenever a vote moves the line.
+  useSocketEvent(socket, "timeline:sync", refresh);
 
   useSocketEvent(
     socket,
@@ -71,30 +81,43 @@ export function VlogShell(props: VlogShellProps) {
     useCallback(
       ({ state: next }: { state: VlogState }) => {
         setState(next);
+        // A render locks everything, so take everyone to the screening room.
+        if (!isWorkingState(next)) setTab("watch");
         router.refresh();
       },
-      [router],
+      [router, setTab],
     ),
   );
 
   const isCreator = member.role === "creator";
+  const working = isWorkingState(state);
+
+  const unrated = useMemo(
+    () =>
+      media.filter(
+        (m) => m.kind !== "audio" && m.status === "ready" && m.reactions.mine === null,
+      ).length,
+    [media],
+  );
+
+  // Rendering locks the workshop; nudge anyone still in it over to Watch.
+  const effectiveTab: WorkspaceTab = working ? tab : "watch";
+
+  const dark = effectiveTab !== "gather";
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-30 border-b border-ink-800 bg-ink-950/85 backdrop-blur-md">
-        <div className="mx-auto max-w-[1600px] px-4 py-3 sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="text-xl">🎬</span>
+    <div className={cn("flex min-h-screen flex-col", dark ? "bg-ink-900" : "bg-paper-100")}>
+      {/* ---------- masthead: always paper, whatever room you're in ---------- */}
+      <header className="sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
+        <div className="mx-auto max-w-[1600px] px-4 sm:px-7">
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-3">
+            <div className="flex min-w-0 items-baseline gap-3">
+              <Wordmark size="sm" className="shrink-0" />
+              <span aria-hidden className="h-4 w-px shrink-0 bg-[color:var(--hair-strong)]" />
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold leading-tight text-white">
+                <h1 className="headline truncate text-xl leading-none sm:text-2xl">
                   {vlog.title}
                 </h1>
-                <p className="text-xs text-ink-500">
-                  {media.length} item{media.length === 1 ? "" : "s"} · {music.length} track
-                  {music.length === 1 ? "" : "s"} · {props.members.length} friend
-                  {props.members.length === 1 ? "" : "s"}
-                </p>
               </div>
             </div>
 
@@ -104,42 +127,54 @@ export function VlogShell(props: VlogShellProps) {
             </div>
           </div>
 
-          <div className="mt-3">
-            <PhaseNav
-              slug={vlog.shareSlug}
-              current={state}
-              isCreator={isCreator}
-              counts={{ media: media.length, music: music.length }}
+          {/* Slate line — the numbers, in mono, never shouting. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            {[
+              `${media.length} clip${media.length === 1 ? "" : "s"}`,
+              `${music.length} track${music.length === 1 ? "" : "s"}`,
+              `${props.members.length} crew`,
+              VLOG_STATE_LABELS[state],
+            ].map((bit, i) => (
+              <span key={bit} className="flex items-center gap-3">
+                {i > 0 && <span aria-hidden className="h-2.5 w-px bg-[color:var(--hair)]" />}
+                <span className="eyebrow">{bit}</span>
+              </span>
+            ))}
+          </div>
+
+          <div className="mt-2">
+            <WorkspaceNav
+              tab={effectiveTab}
+              onTab={setTab}
+              state={state}
+              counts={{
+                clips: props.timeline.clips.length,
+                unrated,
+                hasRender: Boolean(props.latestRender),
+              }}
             />
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 sm:px-6">
-        {state === "open" && (
-          <DumpView
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-7 sm:px-7">
+        {effectiveTab === "gather" && (
+          <GatherView
             slug={vlog.shareSlug}
-            vlogId={vlog.id}
             media={media}
             music={music}
+            timeline={props.timeline}
             reactionTiers={reactionTiers}
             memberId={member.id}
-            socket={socket}
+            crew={props.members.length}
+            scoreThreshold={vlog.scoreThreshold}
             ytAudioEnabled={props.ytAudioEnabled}
+            immichConnection={props.immichConnection}
+            socket={socket}
           />
         )}
 
-        {state === "curate" && (
-          <CurateView
-            slug={vlog.shareSlug}
-            media={media}
-            music={music}
-            reactionTiers={reactionTiers}
-            isCreator={isCreator}
-          />
-        )}
-
-        {state === "edit" && (
+        {effectiveTab === "edit" && (
           <EditorView
             slug={vlog.shareSlug}
             vlogId={vlog.id}
@@ -150,34 +185,88 @@ export function VlogShell(props: VlogShellProps) {
             socket={socket}
             isCreator={isCreator}
             memberId={member.id}
+            onBackToGather={() => setTab("gather")}
           />
         )}
 
-        {(state === "export" || state === "published") && (
+        {effectiveTab === "watch" && (
           <RenderView
             slug={vlog.shareSlug}
+            title={vlog.title}
+            crew={props.members.length}
+            clips={props.timeline.clips.length}
             state={state}
             latestRender={props.latestRender}
             publishedRender={props.publishedRender}
             socket={socket}
             isCreator={isCreator}
+            onBackToEdit={() => setTab("edit")}
           />
         )}
       </main>
 
-      <footer className="border-t border-ink-800 px-4 py-3 text-center text-xs text-ink-600 sm:px-6">
-        <span className={cn("inline-flex items-center gap-1.5", connected && "text-ink-500")}>
+      <footer
+        className={cn(
+          "border-t px-4 py-3 sm:px-7",
+          dark ? "border-[color:var(--hair-dark)]" : "border-[color:var(--hair)]",
+        )}
+      >
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2">
           <span
             className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              connected ? "bg-emerald-400" : "bg-ink-600",
+              "flex items-center gap-2 font-mono text-2xs uppercase tracking-label",
+              dark ? "text-ink-400" : "text-ink-500",
             )}
-          />
-          {connected ? "Live — everyone sees changes instantly" : "Reconnecting…"}
-        </span>
+          >
+            <span
+              className={cn(
+                "h-1.5 w-1.5 rounded-full",
+                connected ? "animate-pulse-dot bg-leader-500" : "bg-signal-600",
+              )}
+            />
+            {connected ? "Synced — the whole crew sees this live" : "Reconnecting…"}
+          </span>
+          <span
+            className={cn(
+              "font-mono text-2xs uppercase tracking-label",
+              dark ? "text-ink-500" : "text-ink-400",
+            )}
+          >
+            ROLLCALL · {vlog.shareSlug}
+          </span>
+        </div>
       </footer>
     </div>
   );
+}
+
+/**
+ * Which room you're in is personal and sticky — come back tomorrow and you're
+ * where you left off, without having changed anything for anyone else.
+ */
+function useTabPreference(slug: string, state: VlogState) {
+  const initial: WorkspaceTab = isWorkingState(state) ? "gather" : "watch";
+  const [tab, setTab] = useState<WorkspaceTab>(initial);
+
+  useEffect(() => {
+    if (!isWorkingState(state)) return;
+    const stored = window.localStorage.getItem(`vb_tab_${slug}`);
+    if (stored === "gather" || stored === "edit" || stored === "watch") setTab(stored);
+  }, [slug, state]);
+
+  const choose = useCallback(
+    (next: WorkspaceTab) => {
+      setTab(next);
+      try {
+        window.localStorage.setItem(`vb_tab_${slug}`, next);
+      } catch {
+        // Private browsing — the tab just won't be remembered.
+      }
+    },
+    [slug],
+  );
+
+  return [tab, choose] as const;
 }
 
 /** Coalesces bursts of realtime events into a single router refresh. */

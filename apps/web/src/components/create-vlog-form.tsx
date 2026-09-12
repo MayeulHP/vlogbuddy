@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { createVlogAction } from "@/lib/actions/vlog";
 
+/** The call sheet: a title, a name, and optionally a word at the door. */
 export function CreateVlogForm() {
   const [error, setError] = useState<string | null>(null);
   const [showPasscode, setShowPasscode] = useState(false);
@@ -18,15 +19,15 @@ export function CreateVlogForm() {
   }
 
   return (
-    <form action={onSubmit} className="space-y-4">
+    <form action={onSubmit} className="space-y-5">
       <div>
-        <label className="label" htmlFor="title">
-          Vlog title
+        <label className="field-label" htmlFor="title">
+          Working title
         </label>
         <input
           id="title"
           name="title"
-          className="input"
+          className="field display-sm text-xl"
           placeholder="Ski trip 2026"
           maxLength={120}
           required
@@ -35,14 +36,14 @@ export function CreateVlogForm() {
       </div>
 
       <div>
-        <label className="label" htmlFor="creatorName">
-          Your name
+        <label className="field-label" htmlFor="creatorName">
+          Credited as
         </label>
         <input
           id="creatorName"
           name="creatorName"
-          className="input"
-          placeholder="Mayeul"
+          className="field"
+          placeholder="Your name"
           maxLength={40}
           required
           autoComplete="nickname"
@@ -50,13 +51,13 @@ export function CreateVlogForm() {
       </div>
 
       <div>
-        <label className="label" htmlFor="description">
-          Description <span className="font-normal text-ink-500">(optional)</span>
+        <label className="field-label" htmlFor="description">
+          Logline <span className="normal-case tracking-normal text-ink-400">(optional)</span>
         </label>
         <textarea
           id="description"
           name="description"
-          className="input min-h-[70px] resize-y"
+          className="field min-h-[58px] resize-y leading-snug"
           placeholder="Three days, too much snow, one broken ski."
           maxLength={1000}
         />
@@ -64,44 +65,32 @@ export function CreateVlogForm() {
 
       {showPasscode ? (
         <div>
-          <label className="label" htmlFor="passcode">
-            Passcode
+          <label className="field-label" htmlFor="passcode">
+            Door code
           </label>
           <input
             id="passcode"
             name="passcode"
-            className="input"
+            className="field timecode"
             placeholder="Friends need this to join"
             minLength={3}
             maxLength={64}
             autoComplete="off"
           />
-          <button
-            type="button"
-            onClick={() => setShowPasscode(false)}
-            className="mt-1.5 text-xs text-ink-500 transition-colors hover:text-ink-300"
-          >
-            Remove passcode
+          <button type="button" onClick={() => setShowPasscode(false)} className="btn-quiet mt-1 px-0">
+            — Remove code
           </button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => setShowPasscode(true)}
-          className="text-xs text-ink-500 transition-colors hover:text-ink-300"
-        >
-          + Protect with a passcode
+        <button type="button" onClick={() => setShowPasscode(true)} className="btn-quiet px-0">
+          + Add a door code
         </button>
       )}
 
-      {error && (
-        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-          {error}
-        </p>
-      )}
+      {error && <p className="notice">{error}</p>}
 
-      <button type="submit" className="btn-primary w-full" disabled={pending}>
-        {pending ? "Creating…" : "Create vlog"}
+      <button type="submit" className="btn-signal w-full" disabled={pending}>
+        {pending ? "Loading the camera…" : "Roll camera"}
       </button>
     </form>
   );

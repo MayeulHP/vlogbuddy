@@ -80,6 +80,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       PUBLIC_STORAGE_URL: ${PUBLIC_STORAGE_URL}
       CORS_ALLOW_ORIGIN: ${CORS_ALLOW_ORIGIN:-}
+      S3_PORT: ${S3_PORT:-9000}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_REGION: ${S3_REGION}
       S3_BUCKET: ${S3_BUCKET}
@@ -109,6 +110,8 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # Unseals stored Immich API keys — must match the web service.
+      SESSION_SECRET: ${SESSION_SECRET}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_REGION: ${S3_REGION}
       S3_BUCKET: ${S3_BUCKET}

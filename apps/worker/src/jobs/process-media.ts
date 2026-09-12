@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -74,6 +76,13 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
     // Prefer the real capture time from the file over the client's guess.
     const capturedAt = info?.capturedAt ?? item.capturedAt ?? null;
 
+    /**
+     * Content hash, in the same shape Immich uses. Computing it here — while
+     * we already have the original on disk — is what lets someone later push
+     * this pile into their own Immich without re-uploading what they have.
+     */
+    const checksumSha1 = item.checksumSha1 ?? (await hashFile(localOriginal));
+
     await db
       .update(mediaItems)
       .set({
@@ -84,6 +93,7 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         height: info?.height ?? null,
         durationSeconds: info?.durationSeconds ?? null,
         capturedAt,
+        checksumSha1,
         error: null,
       })
       .where(eq(mediaItems.id, item.id));
@@ -125,6 +135,16 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+function hashFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha1");
+    createReadStream(filePath)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("error", reject)
+      .on("end", () => resolve(hash.digest("base64")));
+  });
 }
 
 function guessExtension(contentType: string): string {

@@ -8,6 +8,34 @@
       "when": 1789217620453,
       "tag": "0000_great_micromax",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789300800000,
+      "tag": "0001_score_threshold",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789387200000,
+      "tag": "0002_cut_overrides",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789473600000,
+      "tag": "0003_immich",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789560000000,
+      "tag": "0004_simplify_vlog_state",
+      "breakpoints": true
     }
   ]
 }

@@ -1,3 +1,5 @@
+import { DEFAULT_PHOTO_DURATION } from "./constants";
+
 /** URL-safe, unambiguous alphabet (no 0/O/1/l) for share slugs. */
 const SLUG_ALPHABET = "23456789abcdefghijkmnpqrstuvwxyz";
 
@@ -35,6 +37,16 @@ export function formatBytes(bytes: number): string {
     i++;
   }
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
+}
+
+/** How long a dumped item would occupy in the assembled cut. */
+export function estimatedClipDuration(
+  kind: string,
+  durationSeconds: number | null | undefined,
+): number {
+  if (kind === "video") return Math.max(0.05, durationSeconds ?? 5);
+  if (kind === "photo") return DEFAULT_PHOTO_DURATION;
+  return 0;
 }
 
 /**

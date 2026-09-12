@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+/** One link is the entire invitation system. */
 export function ShareBar({ shareUrl }: { shareUrl: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -20,7 +21,7 @@ export function ShareBar({ shareUrl }: { shareUrl: string }) {
   async function share() {
     if (typeof navigator.share === "function") {
       try {
-        await navigator.share({ title: "Join my vlog", url: shareUrl });
+        await navigator.share({ title: "Join the roll", url: shareUrl });
         return;
       } catch {
         // User dismissed the sheet — fall through to copying.
@@ -30,20 +31,8 @@ export function ShareBar({ shareUrl }: { shareUrl: string }) {
   }
 
   return (
-    <button
-      onClick={share}
-      className="btn-secondary whitespace-nowrap text-xs"
-      title={shareUrl}
-    >
-      {copied ? (
-        <>
-          <span>✓</span> Link copied
-        </>
-      ) : (
-        <>
-          <span>🔗</span> Share link
-        </>
-      )}
+    <button onClick={share} className="btn-outline whitespace-nowrap" title={shareUrl}>
+      {copied ? "✓ Link copied" : "Invite crew"}
     </button>
   );
 }

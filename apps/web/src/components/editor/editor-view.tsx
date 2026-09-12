@@ -1,24 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Socket } from "socket.io-client";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
   applyTimelineOp,
-  clipDuration,
   formatDuration,
   timelineDuration,
-  type Clip,
-  type ClientToServerEvents,
-  type ServerToClientEvents,
   type TimelineDoc,
   type TimelineOp,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { startRenderAction } from "@/lib/actions/timeline";
-import { useSocketEvent } from "@/hooks/use-vlog-socket";
+import { setMusicBedAction } from "@/lib/actions/cut";
+import { useSocketEvent, type VlogSocket } from "@/hooks/use-vlog-socket";
 import { ClipInspector } from "./clip-inspector";
 import { TimelineStrip } from "./timeline-strip";
 import { PreviewPlayer } from "./preview-player";
+import { SectionHead } from "../brand";
 import { cn } from "@/lib/cn";
 
 interface EditorViewProps {
@@ -28,15 +25,19 @@ interface EditorViewProps {
   music: MusicItemView[];
   timeline: TimelineDoc;
   revision: number;
-  socket: React.MutableRefObject<Socket<ServerToClientEvents, ClientToServerEvents> | null>;
+  socket: VlogSocket | null;
   isCreator: boolean;
   memberId: string;
+  /** Jumps this viewer back to the Gather page — same document, other lane. */
+  onBackToGather: () => void;
 }
 
 /**
  * The v1 editor: reorder, trim, title, pick the music bed. Deliberately small —
- * the vlog arrives here already assembled from the vote, so this is about
- * tightening it up rather than building from scratch.
+ * the vlog is always already assembled from the vote (the cut engine keeps it
+ * that way), so this is about tightening it up rather than building from
+ * scratch. You can hop back to Gather at any time; both views edit the same
+ * live document.
  *
  * Edits are sent as ops over the socket. The server applies them to the
  * authoritative doc and rebroadcasts; we apply optimistically so it feels
@@ -52,6 +53,7 @@ export function EditorView({
   socket,
   isCreator,
   memberId,
+  onBackToGather,
 }: EditorViewProps) {
   const [timeline, setTimeline] = useState<TimelineDoc>(initialTimeline);
   const [revision, setRevision] = useState(initialRevision);
@@ -103,7 +105,7 @@ export function EditorView({
   );
 
   useEffect(() => {
-    socket.current?.emit("timeline:request", { vlogId });
+    socket?.emit("timeline:request", { vlogId });
   }, [socket, vlogId]);
 
   /** Apply locally for instant feedback, then let the server confirm. */
@@ -112,7 +114,7 @@ export function EditorView({
       setTimeline((prev) => applyTimelineOp(prev, op));
       setError(null);
 
-      const s = socket.current;
+      const s = socket;
       if (!s?.connected) {
         setError("Disconnected — your change wasn't saved. Reconnecting…");
         return;
@@ -147,28 +149,41 @@ export function EditorView({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-white">Final cut</h2>
-          <p className="text-xs text-ink-500">
-            {timeline.clips.length} clips · {formatDuration(totalDuration)} · everyone edits together
-          </p>
-        </div>
-
-        {isCreator && (
-          <button
-            onClick={render}
-            disabled={rendering || timeline.clips.length === 0}
-            className="btn-primary text-xs"
-          >
-            {rendering ? "Starting…" : "🎬 Render the vlog"}
-          </button>
-        )}
-      </div>
+    <div className="space-y-5">
+      <SectionHead
+        tone="ink"
+        eyebrow="Beat 05 · Cut"
+        title="The cutting bench"
+        note="Already assembled from the crew's marks — this is where you tighten it. Trim, retime, title, score. Everyone edits the same strip, live."
+        right={
+          <div className="flex items-stretch gap-3">
+            <button onClick={onBackToGather} className="btn-quiet-dark self-end">
+              ← Back to the floor
+            </button>
+            <div className="border border-[color:var(--hair-dark)] bg-ink-850 px-3 py-2 text-right">
+              <p className="eyebrow-light">Running time</p>
+              <p className="timecode mt-0.5 text-lg leading-none text-paper-100">
+                {formatDuration(totalDuration)}
+              </p>
+              <p className="eyebrow-light mt-1">
+                {timeline.clips.length} shot{timeline.clips.length === 1 ? "" : "s"}
+              </p>
+            </div>
+            {isCreator && (
+              <button
+                onClick={render}
+                disabled={rendering || timeline.clips.length === 0}
+                className="btn-signal self-stretch"
+              >
+                {rendering ? "Loading…" : "Print the film"}
+              </button>
+            )}
+          </div>
+        }
+      />
 
       {error && (
-        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        <p className="border border-signal-500/40 bg-signal-900/30 px-3 py-2 font-mono text-[11px] text-signal-300">
           {error}
         </p>
       )}
@@ -192,6 +207,7 @@ export function EditorView({
             selectedClipId={selectedClipId}
             onSelectClip={setSelectedClipId}
             onDispatch={dispatch}
+            onBackToGather={onBackToGather}
           />
         </div>
 
@@ -205,12 +221,17 @@ export function EditorView({
               onDispatch={dispatch}
             />
           ) : (
-            <div className="card p-4 text-center text-xs text-ink-600">
-              Pick a clip to trim it, add a title, or change how it transitions in.
+            <div className="border border-[color:var(--hair-dark)] bg-ink-850 p-5 text-center">
+              <p className="eyebrow-light">No shot selected</p>
+              <p className="mt-2 text-[13px] leading-relaxed text-ink-300">
+                Pick a shot on the strip to trim it, lay a title over it, or change how it comes
+                in.
+              </p>
             </div>
           )}
 
           <MusicBed
+            slug={slug}
             timeline={timeline}
             music={music}
             media={media}
@@ -222,37 +243,57 @@ export function EditorView({
   );
 }
 
-/** Chooses the audio bed: a voted streaming track, or an uploaded audio file. */
+/**
+ * Chooses the audio bed: a voted streaming track, or an uploaded audio file.
+ *
+ * Streaming tracks go through the cut engine (same choice as the soundtrack
+ * lane on the Gather page, so the two can't disagree). Uploaded audio is set
+ * directly on the timeline — the cut engine leaves an uploaded bed alone.
+ */
 function MusicBed({
+  slug,
   timeline,
   music,
   media,
   onDispatch,
 }: {
+  slug: string;
   timeline: TimelineDoc;
   music: MusicItemView[];
   media: MediaItemView[];
   onDispatch: (op: TimelineOp) => void;
 }) {
+  const [, startTransition] = useTransition();
   const track = timeline.audio[0] ?? null;
   const audioUploads = media.filter((m) => m.contentType.startsWith("audio/"));
 
   return (
-    <section className="card p-4">
-      <h3 className="mb-1 text-sm font-semibold text-white">Music bed</h3>
-      <p className="mb-3 text-xs text-ink-500">
-        Plays under the whole cut.
-      </p>
+    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
+      <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
+        <p className="eyebrow-light">Score</p>
+        <h3 className="headline mt-0.5 text-xl text-paper-100">The bed</h3>
+        <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-500">
+          Runs under the whole cut
+        </p>
+      </div>
 
-      <div className="space-y-1.5">
+      <div className="divide-y divide-[color:var(--hair-dark)]">
         <button
-          onClick={() => onDispatch({ type: "audio.remove", index: 0 })}
+          onClick={() =>
+            startTransition(() => {
+              onDispatch({ type: "audio.remove", index: 0 });
+              return setMusicBedAction(slug, null).then(() => {});
+            })
+          }
           className={cn(
-            "flex w-full items-center gap-2 rounded-lg border p-2 text-left text-xs transition-colors",
-            !track ? "border-brand-500/60 bg-brand-500/10 text-white" : "border-ink-800 text-ink-400 hover:border-ink-700",
+            "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
+            !track
+              ? "bg-signal-900/40 text-paper-100"
+              : "text-ink-400 hover:bg-ink-800 hover:text-paper-200",
           )}
         >
-          <span>🔇</span> No music
+          <span className="eyebrow-light w-10 shrink-0">Dry</span>
+          <span className="min-w-0 flex-1 truncate">No score</span>
         </button>
 
         {audioUploads.map((item) => {
@@ -276,15 +317,17 @@ function MusicBed({
                 })
               }
               className={cn(
-                "flex w-full items-center gap-2 rounded-lg border p-2 text-left text-xs transition-colors",
+                "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
                 active
-                  ? "border-brand-500/60 bg-brand-500/10 text-white"
-                  : "border-ink-800 text-ink-300 hover:border-ink-700",
+                  ? "bg-signal-900/40 text-paper-100"
+                  : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
               )}
             >
-              <span>🎧</span>
+              <span className="eyebrow-light w-10 shrink-0">File</span>
               <span className="min-w-0 flex-1 truncate">{item.originalFilename}</span>
-              <span className="shrink-0 text-[10px] text-emerald-400">uploaded</span>
+              <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-leader-400">
+                ready
+              </span>
             </button>
           );
         })}
@@ -295,26 +338,12 @@ function MusicBed({
           return (
             <button
               key={item.id}
-              onClick={() =>
-                onDispatch({
-                  type: "audio.set",
-                  index: 0,
-                  track: {
-                    musicItemId: item.id,
-                    mediaItemId: null,
-                    offset: 0,
-                    startAt: 0,
-                    volume: 0.8,
-                    fadeIn: 1,
-                    fadeOut: 2,
-                  },
-                })
-              }
+              onClick={() => startTransition(() => setMusicBedAction(slug, item.id).then(() => {}))}
               className={cn(
-                "flex w-full items-center gap-2 rounded-lg border p-2 text-left text-xs transition-colors",
+                "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
                 active
-                  ? "border-brand-500/60 bg-brand-500/10 text-white"
-                  : "border-ink-800 text-ink-300 hover:border-ink-700",
+                  ? "bg-signal-900/40 text-paper-100"
+                  : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
               )}
               title={
                 hasAudio
@@ -322,12 +351,12 @@ function MusicBed({
                   : "No audio file for this track — it won't be in the render"
               }
             >
-              <span>🎵</span>
+              <span className="eyebrow-light w-10 shrink-0">Link</span>
               <span className="min-w-0 flex-1 truncate">{item.title ?? item.url}</span>
               <span
                 className={cn(
-                  "shrink-0 text-[10px]",
-                  hasAudio ? "text-emerald-400" : "text-amber-400",
+                  "shrink-0 font-mono text-2xs uppercase tracking-label",
+                  hasAudio ? "text-leader-400" : "text-tape-400",
                 )}
               >
                 {hasAudio ? "ready" : "no audio"}
@@ -338,9 +367,9 @@ function MusicBed({
       </div>
 
       {track && (
-        <div className="mt-3 space-y-2 border-t border-ink-800 pt-3">
+        <div className="space-y-3 border-t border-[color:var(--hair-dark)] px-4 py-3">
           <label className="block">
-            <span className="text-[11px] text-ink-400">Volume — {Math.round(track.volume * 100)}%</span>
+            <span className="eyebrow-light">Level — {Math.round(track.volume * 100)}%</span>
             <input
               type="range"
               min={0}
@@ -354,11 +383,11 @@ function MusicBed({
                   track: { ...track, volume: Number(e.target.value) },
                 })
               }
-              className="mt-1 h-1 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+              className="slider slider-dark mt-1.5"
             />
           </label>
 
-          <label className="flex items-center gap-2 text-[11px] text-ink-400">
+          <label className="flex items-center gap-2 font-mono text-2xs uppercase tracking-label text-ink-300">
             <input
               type="checkbox"
               checked={timeline.duckClipAudio}
@@ -368,9 +397,9 @@ function MusicBed({
                   patch: { duckClipAudio: e.target.checked },
                 })
               }
-              className="accent-brand-500"
+              className="check check-dark"
             />
-            Quieten clip audio under the music
+            Duck the shots under the score
           </label>
         </div>
       )}

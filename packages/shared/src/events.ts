@@ -32,6 +32,20 @@ export interface ReactionPayload {
   totals: { count: number; sum: number; average: number };
 }
 
+export interface ImmichTransferPayload {
+  transferId: string;
+  memberId: string;
+  direction: "import" | "export";
+  label: string;
+  status: "queued" | "running" | "done" | "failed";
+  total: number;
+  done: number;
+  skipped: number;
+  failed: number;
+  message?: string | null;
+  error?: string | null;
+}
+
 export interface RenderProgressPayload {
   renderJobId: string;
   status: RenderStatus;
@@ -64,11 +78,13 @@ export interface ServerToClientEvents {
   "selection:reordered": (payload: { order: string[] }) => void;
 
   "vlog:state": (payload: { state: VlogState }) => void;
+  "vlog:threshold": (payload: { threshold: number }) => void;
 
   "timeline:sync": (payload: { timeline: TimelineDoc; revision: number }) => void;
   "timeline:op": (payload: { op: TimelineOp; revision: number; byMemberId: string }) => void;
 
   "render:progress": (payload: RenderProgressPayload) => void;
+  "immich:transfer": (payload: ImmichTransferPayload) => void;
 
   error: (payload: { message: string }) => void;
 }

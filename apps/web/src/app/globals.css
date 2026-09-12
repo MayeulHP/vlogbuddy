@@ -2,80 +2,354 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * ROLLCALL — the print shop.
+ *
+ * Everything here is either paper (the light rooms: dropping, voting,
+ * shortlisting) or ink (the dark rooms: the cut, the screening). The shared
+ * vocabulary is hairlines, mono labels, registration marks and film
+ * perforations. Nothing glows.
+ */
+
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+
+  --hair: rgba(17, 19, 21, 0.15);
+  --hair-strong: rgba(17, 19, 21, 0.3);
+  --hair-dark: rgba(240, 240, 236, 0.15);
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
-  @apply bg-ink-950 text-ink-100 antialiased;
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(139, 92, 246, 0.12), transparent),
-    radial-gradient(ellipse 60% 50% at 90% 110%, rgba(6, 182, 212, 0.08), transparent);
-  background-attachment: fixed;
+  @apply bg-paper-100 font-sans text-ink-900 antialiased;
   min-height: 100vh;
+  font-feature-settings: "ss01";
+}
+
+::selection {
+  background: theme("colors.signal.500");
+  color: theme("colors.paper.50");
+}
+
+/* Film grain over the whole page. Dialled low enough to read as paper tooth. */
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: -50%;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.32;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  animation: grainDrift 1.1s steps(4, end) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grain::after {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 @layer components {
+  /* ---------- type ---------- */
+
+  .wordmark {
+    @apply font-display font-bold tracking-wordmark;
+    font-variation-settings: "opsz" 12;
+  }
+
+  /* Uppercase mono micro-label. The workhorse of the whole interface. */
+  .eyebrow {
+    @apply font-mono text-2xs uppercase tracking-label text-ink-500;
+  }
+  .eyebrow-light {
+    @apply font-mono text-2xs uppercase tracking-label text-ink-400;
+  }
+  .eyebrow-signal {
+    @apply font-mono text-2xs uppercase tracking-label text-signal-600;
+  }
+
+  /* Display type at UI sizes — nav labels, inputs, small serif buttons. */
+  .display-sm {
+    @apply font-display font-bold;
+    font-variation-settings: "opsz" 10;
+  }
+
+  .timecode {
+    @apply font-mono tabular-nums tracking-tight;
+  }
+
+  /*
+   * Bodoni is a didone: thick stems, hairline thins. Left alone it sets far too
+   * light to read on paper, and the optical-size axis makes it worse — the
+   * bigger the text, the finer the hairlines get. So everything runs bold, and
+   * `opsz` is pinned to a small-text value at every size, which is what keeps
+   * the thin strokes present instead of disappearing.
+   */
+  .headline {
+    @apply font-display font-bold leading-[1.02] tracking-[-0.005em];
+    font-variation-settings: "opsz" 14;
+  }
+  .headline-xl {
+    @apply headline leading-[0.94] tracking-[-0.015em];
+    font-variation-settings: "opsz" 22;
+  }
+
+  /* ---------- surfaces ---------- */
+
+  /* A sheet of paper with a hairline edge. */
+  .sheet {
+    @apply border border-[color:var(--hair)] bg-paper-50;
+  }
+  .sheet-sunk {
+    @apply border border-[color:var(--hair)] bg-paper-200;
+  }
+  /* The editing room: ink, not paper. */
+  .slab {
+    @apply border border-ink-800 bg-ink-900 text-paper-200;
+  }
+
+  .hairline {
+    @apply border-[color:var(--hair)];
+  }
+  .hairline-dark {
+    @apply border-[color:var(--hair-dark)];
+  }
+
+  /* Light table — faint grid, for anything media sits on top of. */
+  .lighttable {
+    @apply bg-paper-200 bg-grid;
+    background-size: 8px 8px;
+  }
+
+  /* ---------- registration / crop marks ---------- */
+
+  .crop-marks {
+    position: relative;
+  }
+  .crop-marks::before {
+    content: "";
+    position: absolute;
+    inset: -5px;
+    pointer-events: none;
+    color: var(--hair-strong);
+    background:
+      linear-gradient(currentColor, currentColor) 0 0 / 1px 9px no-repeat,
+      linear-gradient(currentColor, currentColor) 0 0 / 9px 1px no-repeat,
+      linear-gradient(currentColor, currentColor) 100% 0 / 1px 9px no-repeat,
+      linear-gradient(currentColor, currentColor) 100% 0 / 9px 1px no-repeat,
+      linear-gradient(currentColor, currentColor) 0 100% / 1px 9px no-repeat,
+      linear-gradient(currentColor, currentColor) 0 100% / 9px 1px no-repeat,
+      linear-gradient(currentColor, currentColor) 100% 100% / 1px 9px no-repeat,
+      linear-gradient(currentColor, currentColor) 100% 100% / 9px 1px no-repeat;
+  }
+  .crop-marks-dark::before {
+    color: rgba(240, 240, 236, 0.3);
+  }
+
+  /* ---------- film perforations ---------- */
+
+  /* Put on a strip's top/bottom edge. `currentColor` picks the hole colour. */
+  .perf {
+    @apply bg-sprocket;
+    background-size: 20px 100%;
+  }
+  .perf-strip {
+    position: relative;
+  }
+  .perf-strip::before,
+  .perf-strip::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 7px;
+    color: rgba(240, 240, 236, 0.22);
+    background: repeating-linear-gradient(
+      90deg,
+      transparent 0 5px,
+      currentColor 5px 13px,
+      transparent 13px 20px
+    );
+  }
+  .perf-strip::before {
+    top: 3px;
+  }
+  .perf-strip::after {
+    bottom: 3px;
+  }
+
+  /* ---------- controls ---------- */
+
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
-           transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex select-none items-center justify-center gap-1.5 border font-mono text-[11px]
+           uppercase tracking-label transition-all duration-150
+           disabled:cursor-not-allowed disabled:opacity-40;
+    padding: 0.45rem 0.85rem;
   }
-  .btn-primary {
-    @apply btn bg-brand-500 text-white hover:bg-brand-400 active:scale-[0.98]
-           shadow-lg shadow-brand-500/20;
+  .btn-signal {
+    @apply btn border-signal-600 bg-signal-600 text-paper-50
+           hover:border-signal-700 hover:bg-signal-700 active:translate-y-px;
   }
-  .btn-secondary {
-    @apply btn bg-ink-800 text-ink-200 hover:bg-ink-700 border border-ink-700;
+  .btn-ink {
+    @apply btn border-ink-900 bg-ink-900 text-paper-100 hover:bg-ink-800 active:translate-y-px;
   }
-  .btn-ghost {
-    @apply btn text-ink-300 hover:bg-ink-800 hover:text-white;
+  .btn-outline {
+    @apply btn border-[color:var(--hair-strong)] bg-transparent text-ink-900
+           hover:border-ink-900 hover:bg-ink-900 hover:text-paper-50 active:translate-y-px;
+  }
+  .btn-quiet {
+    @apply btn border-transparent bg-transparent text-ink-500 hover:text-signal-600;
   }
   .btn-danger {
-    @apply btn bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/30;
+    @apply btn border-signal-700/40 bg-signal-100 text-signal-800 hover:border-signal-700 hover:bg-signal-200;
+  }
+  /* Dark-room variants, for the cut and the screening room. */
+  .btn-outline-dark {
+    @apply btn border-[color:var(--hair-dark)] bg-transparent text-paper-200
+           hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900 active:translate-y-px;
+  }
+  .btn-quiet-dark {
+    @apply btn border-transparent bg-transparent text-ink-400 hover:text-signal-400;
   }
 
-  .card {
-    @apply rounded-xl border border-ink-800 bg-ink-900/70 backdrop-blur-sm;
+  /* Inputs read like a form on a call sheet: rule underneath, no box. */
+  .field {
+    @apply w-full border-0 border-b border-[color:var(--hair-strong)] bg-transparent px-0 py-2
+           font-sans text-sm text-ink-900 transition-colors
+           placeholder:text-ink-400 focus:border-signal-600 focus:outline-none focus:ring-0;
+  }
+  .field-dark {
+    @apply w-full border-0 border-b border-[color:var(--hair-dark)] bg-transparent px-0 py-2
+           text-sm text-paper-100 transition-colors
+           placeholder:text-ink-500 focus:border-signal-500 focus:outline-none focus:ring-0;
+  }
+  .field-label {
+    @apply eyebrow mb-1 block;
   }
 
-  .input {
-    @apply w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2 text-sm text-white
-           placeholder:text-ink-500 focus:border-brand-500 focus:outline-none focus:ring-1
-           focus:ring-brand-500 transition-colors;
+  /* ---------- small parts ---------- */
+
+  .tag {
+    @apply inline-flex items-center gap-1 border px-1.5 py-0.5 font-mono text-2xs uppercase tracking-label;
+  }
+  .tag-signal {
+    @apply tag border-signal-600/40 bg-signal-100 text-signal-700;
+  }
+  .tag-ink {
+    @apply tag border-[color:var(--hair)] bg-paper-200 text-ink-600;
+  }
+  .tag-dark {
+    @apply tag border-[color:var(--hair-dark)] bg-ink-850 text-ink-300;
+  }
+  .tag-tape {
+    @apply tag border-tape-500/45 bg-tape-200 text-tape-600;
+  }
+  .tag-leader {
+    @apply tag border-leader-500/40 bg-leader-400/15 text-leader-600;
   }
 
-  .label {
-    @apply block text-sm font-medium text-ink-300 mb-1.5;
+  /* Rubber-stamp verdict, as used in the voting room. */
+  .stamp {
+    @apply inline-flex items-center gap-2 border-2 px-3 py-1 font-display text-2xl font-bold uppercase leading-none;
+    font-variation-settings: "opsz" 14;
+    transform: rotate(-6deg);
   }
 
-  .chip {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
+  .notice {
+    @apply border border-signal-600/35 bg-signal-100 px-3 py-2 font-mono text-[11px] text-signal-800;
+  }
+  .notice-tape {
+    @apply border border-tape-500/40 bg-tape-200/70 px-3 py-2 font-mono text-[11px] leading-relaxed text-tape-600;
+  }
+
+  /* Section head: eyebrow + serif title + rule, used on every block. */
+  .section-rule {
+    @apply border-b border-[color:var(--hair-strong)];
+  }
+
+  /* Sliders — a grease-pencil line with a square handle. */
+  .slider {
+    @apply h-[3px] w-full cursor-pointer appearance-none bg-ink-300;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 15px;
+    width: 9px;
+    border-radius: 1px;
+    background: theme("colors.signal.600");
+    box-shadow: 0 0 0 1px rgba(17, 19, 21, 0.25);
+    cursor: grab;
+  }
+  .slider::-moz-range-thumb {
+    height: 15px;
+    width: 9px;
+    border: 0;
+    border-radius: 1px;
+    background: theme("colors.signal.600");
+    cursor: grab;
+  }
+  .slider-dark {
+    @apply bg-ink-700;
+  }
+
+  /* Checkboxes keep the square language. */
+  .check {
+    @apply h-3.5 w-3.5 shrink-0 cursor-pointer appearance-none border border-[color:var(--hair-strong)] bg-transparent
+           checked:border-signal-600 checked:bg-signal-600;
+  }
+  .check:checked::after {
+    content: "✓";
+    display: block;
+    margin-top: -3px;
+    text-align: center;
+    font-size: 11px;
+    line-height: 1;
+    color: theme("colors.paper.50");
+  }
+  .check-dark {
+    @apply border-[color:var(--hair-dark)];
   }
 }
 
-/* Thin scrollbars for the horizontal dump/timeline strips. */
+/* Hairline scrollbars for the strips and contact sheets. */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: theme("colors.ink.700") transparent;
+  scrollbar-color: rgba(17, 19, 21, 0.3) transparent;
 }
 .scrollbar-thin::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
+  height: 9px;
+  width: 9px;
 }
 .scrollbar-thin::-webkit-scrollbar-track {
   background: transparent;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  background-color: theme("colors.ink.700");
-  border-radius: 9999px;
+  background-color: rgba(17, 19, 21, 0.24);
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background-color: theme("colors.ink.600");
+  background-color: rgba(17, 19, 21, 0.42);
+}
+.scrollbar-dark {
+  scrollbar-color: rgba(240, 240, 236, 0.24) transparent;
+}
+.scrollbar-dark::-webkit-scrollbar-thumb {
+  background-color: rgba(240, 240, 236, 0.22);
 }
 
-.text-ink-100 {
-  color: #e8e8f0;
-}
-.text-ink-200 {
-  color: #d0d0dd;
+/* Media on paper gets a hair of warmth so photos sit in the palette. */
+.print-tone {
+  filter: saturate(0.92) contrast(1.04);
 }

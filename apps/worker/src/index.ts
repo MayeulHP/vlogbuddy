@@ -4,10 +4,17 @@ import { env } from "./env";
 import { processMedia, type ProcessMediaJob } from "./jobs/process-media";
 import { extractAudio, type ExtractAudioJob } from "./jobs/extract-audio";
 import { renderVlog, type RenderJobPayload } from "./jobs/render";
-
-const QUEUE_PROCESS_MEDIA = "process-media";
-const QUEUE_EXTRACT_AUDIO = "extract-audio";
-const QUEUE_RENDER = "render-vlog";
+import { immichImport, type ImmichImportJob } from "./jobs/immich-import";
+import { immichExport, type ImmichExportJob } from "./jobs/immich-export";
+import {
+  ALL_QUEUES,
+  QUEUE_EXTRACT_AUDIO,
+  QUEUE_IMMICH_EXPORT,
+  QUEUE_IMMICH_IMPORT,
+  QUEUE_PROCESS_MEDIA,
+  QUEUE_RENDER,
+  setBoss,
+} from "./queue";
 
 async function main() {
   const e = env();
@@ -23,10 +30,11 @@ async function main() {
   boss.on("error", (err) => console.error("[worker] queue error:", err));
 
   await boss.start();
+  setBoss(boss);
 
   // pg-boss v10 requires queues to exist before send()/work() — without this,
   // jobs are silently dropped and nothing ever processes.
-  for (const queue of [QUEUE_PROCESS_MEDIA, QUEUE_EXTRACT_AUDIO, QUEUE_RENDER]) {
+  for (const queue of ALL_QUEUES) {
     try {
       await boss.createQueue(queue);
     } catch (err) {
@@ -63,6 +71,28 @@ async function main() {
     async ([job]) => {
       console.log(`[worker] render ${job.data.renderJobId}`);
       await renderVlog(job.data);
+    },
+  );
+
+  /**
+   * Immich transfers are network-bound and can run for a long time on a big
+   * album, so they get their own workers rather than queueing behind a render.
+   */
+  await boss.work<ImmichImportJob>(
+    QUEUE_IMMICH_IMPORT,
+    { batchSize: 1, pollingIntervalSeconds: 2 },
+    async ([job]) => {
+      console.log(`[worker] immich-import ${job.data.transferId}`);
+      await immichImport(job.data);
+    },
+  );
+
+  await boss.work<ImmichExportJob>(
+    QUEUE_IMMICH_EXPORT,
+    { batchSize: 1, pollingIntervalSeconds: 2 },
+    async ([job]) => {
+      console.log(`[worker] immich-export ${job.data.transferId}`);
+      await immichExport(job.data);
     },
   );
 

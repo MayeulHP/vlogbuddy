@@ -11,7 +11,6 @@ import {
   generateToken,
   joinVlogSchema,
   setStateSchema,
-  VLOG_STATES,
   type VlogState,
 } from "@vlogbuddy/shared";
 import {
@@ -134,15 +133,14 @@ export async function setVlogStateAction(slug: string, state: VlogState): Promis
     const session = await requireMemberBySlug(slug);
     requireCreator(session);
 
-    const current = VLOG_STATES.indexOf(session.vlog.state);
-    const next = VLOG_STATES.indexOf(parsed.data.state);
-
-    // Forward one step at a time, or back one step to fix a mistake.
-    if (next > current + 1) {
-      return { ok: false, error: "You can't skip ahead — advance one phase at a time" };
-    }
-    if (next < current - 1) {
-      return { ok: false, error: "You can only step back one phase" };
+    /**
+     * Rendering is the only thing that moves a film forward, and
+     * `startRenderAction` owns that step (the worker owns `published`). So this
+     * action is purely the way back: a printed film can be reopened and re-cut
+     * without anyone being stuck.
+     */
+    if (parsed.data.state !== "open") {
+      return { ok: false, error: "Start a render from the bench to move the film on" };
     }
 
     await db

@@ -9,7 +9,9 @@ import {
   getVlogMembers,
   reactionTiersFor,
 } from "@/lib/queries";
+import { connectionForMember, publicConnection } from "@/lib/immich";
 import { JoinForm } from "@/components/join-form";
+import { Wordmark } from "@/components/brand";
 import { VlogShell } from "@/components/vlog-shell";
 import { env } from "@/lib/env";
 
@@ -22,35 +24,55 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
 
   const member = await getCurrentMember(vlog.id);
 
-  // Not joined yet — show the name prompt instead of the vlog.
+  // Not joined yet — the invitation, then the crew list.
   if (!member) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-12">
-        <div className="card p-6">
-          <div className="mb-1 flex items-center gap-2 text-sm text-ink-400">
-            <span>🎬</span>
-            <span>You&apos;ve been invited to</span>
+      <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center px-5 py-12">
+        <div className="mb-5 flex items-baseline justify-between">
+          <Wordmark size="sm" />
+          <span className="eyebrow">Call sheet</span>
+        </div>
+
+        <div className="sheet crop-marks shadow-print">
+          <div className="border-b border-[color:var(--hair-strong)] px-6 py-5">
+            <p className="eyebrow-signal">You&apos;re on the crew for</p>
+            <h1 className="headline-xl mt-2 text-[clamp(2rem,6vw,3rem)]">{vlog.title}</h1>
+            {vlog.description && (
+              <p className="mt-3 max-w-md text-[13px] leading-relaxed text-ink-600">
+                {vlog.description}
+              </p>
+            )}
           </div>
-          <h1 className="text-2xl font-bold text-white">{vlog.title}</h1>
-          {vlog.description && (
-            <p className="mt-2 text-sm leading-relaxed text-ink-400">{vlog.description}</p>
-          )}
-          <div className="mt-6">
+
+          <div className="px-6 py-6">
             <JoinForm slug={slug} requiresPasscode={Boolean(vlog.passcodeHash)} />
           </div>
+
+          <div className="border-t border-[color:var(--hair)] bg-paper-100 px-6 py-3">
+            <div className="flex items-center justify-between">
+              <span className="eyebrow">Roll</span>
+              <span className="timecode text-2xs text-ink-500">{vlog.shareSlug}</span>
+            </div>
+          </div>
         </div>
+
+        <p className="mt-5 text-center font-mono text-2xs leading-relaxed text-ink-500">
+          Everyone brought the footage. Make the film together.
+        </p>
       </main>
     );
   }
 
-  const [media, music, membersList, timeline, latestRender, published] = await Promise.all([
-    getMediaItems(vlog.id, member.id),
-    getMusicItems(vlog.id, member.id),
-    getVlogMembers(vlog.id),
-    getTimeline(vlog.id),
-    getLatestRenderJob(vlog.id),
-    getPublishedRender(vlog.id),
-  ]);
+  const [media, music, membersList, timeline, latestRender, published, immich] =
+    await Promise.all([
+      getMediaItems(vlog.id, member.id),
+      getMusicItems(vlog.id, member.id),
+      getVlogMembers(vlog.id),
+      getTimeline(vlog.id),
+      getLatestRenderJob(vlog.id),
+      getPublishedRender(vlog.id),
+      connectionForMember(member.id),
+    ]);
 
   return (
     <VlogShell
@@ -60,6 +82,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
         description: vlog.description,
         shareSlug: vlog.shareSlug,
         state: vlog.state,
+        scoreThreshold: vlog.scoreThreshold,
       }}
       member={{
         id: member.id,
@@ -78,6 +101,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
       reactionTiers={reactionTiersFor(vlog)}
       latestRender={latestRender}
       publishedRender={published}
+      immichConnection={immich ? publicConnection(immich) : null}
       shareUrl={`${env().PUBLIC_BASE_URL}/v/${vlog.shareSlug}`}
       ytAudioEnabled={env().ENABLE_YT_AUDIO}
     />

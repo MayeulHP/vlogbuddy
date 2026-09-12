@@ -4,7 +4,7 @@ import { formatDuration, clipDuration, type Clip, type TimelineOp } from "@vlogb
 import type { MediaItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
 
-/** Trim, title and transition controls for the selected clip. */
+/** Trim, title and transition controls for the selected shot. */
 export function ClipInspector({
   clip,
   media,
@@ -26,30 +26,33 @@ export function ClipInspector({
   }
 
   return (
-    <section className="card p-4">
-      <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-white">
-          Clip {index + 1}
-          <span className="ml-1 font-normal text-ink-600">of {total}</span>
-        </h3>
-        <span className="text-xs tabular-nums text-ink-500">{formatDuration(effective)}</span>
+    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
+      <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="eyebrow-light">
+            Shot {String(index + 1).padStart(2, "0")} of {String(total).padStart(2, "0")}
+          </p>
+          <p className="timecode text-sm text-paper-100">{formatDuration(effective)}</p>
+        </div>
+        {media && (
+          <p
+            className="timecode mt-1 truncate text-2xs text-ink-400"
+            title={media.originalFilename}
+          >
+            {media.originalFilename}
+          </p>
+        )}
       </div>
 
-      {media && (
-        <p className="mb-3 truncate text-[11px] text-ink-500" title={media.originalFilename}>
-          {media.originalFilename}
-        </p>
-      )}
-
-      <div className="space-y-4">
+      <div className="space-y-5 px-4 py-4">
         {/* Trim (video) or hold time (photo) */}
         {clip.kind === "video" && sourceDuration ? (
           <div>
-            <span className="label mb-2">Trim</span>
-            <div className="space-y-2">
+            <p className="eyebrow-light mb-2">Trim</p>
+            <div className="space-y-3">
               <label className="block">
-                <span className="text-[11px] text-ink-500">
-                  Start — {formatDuration(clip.trimStart)}
+                <span className="timecode text-2xs text-ink-300">
+                  In — {formatDuration(clip.trimStart)}
                 </span>
                 <input
                   type="range"
@@ -60,16 +63,16 @@ export function ClipInspector({
                   onChange={(e) => {
                     const value = Number(e.target.value);
                     const end = clip.trimEnd ?? sourceDuration;
-                    // Always leave at least a slice of clip.
+                    // Always leave at least a slice of shot.
                     patch({ trimStart: Math.min(value, end - 0.2) });
                   }}
-                  className="mt-1 h-1 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+                  className="slider slider-dark mt-1.5"
                 />
               </label>
 
               <label className="block">
-                <span className="text-[11px] text-ink-500">
-                  End — {formatDuration(clip.trimEnd ?? sourceDuration)}
+                <span className="timecode text-2xs text-ink-300">
+                  Out — {formatDuration(clip.trimEnd ?? sourceDuration)}
                 </span>
                 <input
                   type="range"
@@ -81,13 +84,13 @@ export function ClipInspector({
                     const value = Number(e.target.value);
                     patch({ trimEnd: Math.max(value, clip.trimStart + 0.2) });
                   }}
-                  className="mt-1 h-1 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+                  className="slider slider-dark mt-1.5"
                 />
               </label>
 
               <button
                 onClick={() => patch({ trimStart: 0, trimEnd: sourceDuration })}
-                className="text-[11px] text-ink-500 hover:text-ink-300"
+                className="btn-quiet-dark px-0"
               >
                 Reset trim
               </button>
@@ -95,7 +98,7 @@ export function ClipInspector({
           </div>
         ) : (
           <label className="block">
-            <span className="label">Hold for {clip.duration.toFixed(1)}s</span>
+            <p className="eyebrow-light mb-1.5">Hold for {clip.duration.toFixed(1)}s</p>
             <input
               type="range"
               min={0.5}
@@ -103,40 +106,40 @@ export function ClipInspector({
               step={0.5}
               value={clip.duration}
               onChange={(e) => patch({ duration: Number(e.target.value) })}
-              className="h-1 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+              className="slider slider-dark"
             />
           </label>
         )}
 
         {/* Transition */}
         <div>
-          <span className="label">Transition in</span>
-          <div className="flex gap-1.5">
+          <p className="eyebrow-light mb-1.5">Comes in on</p>
+          <div className="grid grid-cols-2 gap-px border border-[color:var(--hair-dark)]">
             {(["cut", "crossfade"] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => patch({ transitionIn: mode })}
                 disabled={index === 0}
                 className={cn(
-                  "flex-1 rounded-lg border px-2 py-1.5 text-xs transition-colors disabled:opacity-40",
+                  "py-2 font-mono text-2xs uppercase tracking-label transition-colors disabled:opacity-30",
                   clip.transitionIn === mode
-                    ? "border-brand-500/60 bg-brand-500/15 text-white"
-                    : "border-ink-800 text-ink-400 hover:border-ink-700",
+                    ? "bg-signal-600 text-paper-50"
+                    : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
                 )}
               >
-                {mode === "cut" ? "Cut" : "⇄ Crossfade"}
+                {mode === "cut" ? "A cut" : "⇄ Dissolve"}
               </button>
             ))}
           </div>
           {index === 0 && (
-            <p className="mt-1 text-[10px] text-ink-600">
-              The first clip has nothing to transition from.
+            <p className="mt-1.5 font-mono text-2xs text-ink-500">
+              The first shot has nothing to come in from.
             </p>
           )}
           {clip.transitionIn === "crossfade" && index > 0 && (
-            <label className="mt-2 block">
-              <span className="text-[11px] text-ink-500">
-                Length — {clip.transitionDuration.toFixed(1)}s
+            <label className="mt-2.5 block">
+              <span className="timecode text-2xs text-ink-300">
+                Over {clip.transitionDuration.toFixed(1)}s
               </span>
               <input
                 type="range"
@@ -145,7 +148,7 @@ export function ClipInspector({
                 step={0.1}
                 value={clip.transitionDuration}
                 onChange={(e) => patch({ transitionDuration: Number(e.target.value) })}
-                className="mt-1 h-1 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+                className="slider slider-dark mt-1.5"
               />
             </label>
           )}
@@ -154,14 +157,14 @@ export function ClipInspector({
         {/* Audio */}
         {clip.kind === "video" && (
           <div>
-            <label className="flex items-center gap-2 text-xs text-ink-300">
+            <label className="flex items-center gap-2 font-mono text-2xs uppercase tracking-label text-ink-300">
               <input
                 type="checkbox"
                 checked={!clip.muted}
                 onChange={(e) => patch({ muted: !e.target.checked })}
-                className="accent-brand-500"
+                className="check check-dark"
               />
-              Keep this clip&apos;s sound
+              Keep this shot&apos;s sound
             </label>
             {!clip.muted && (
               <input
@@ -171,7 +174,8 @@ export function ClipInspector({
                 step={0.05}
                 value={clip.volume}
                 onChange={(e) => patch({ volume: Number(e.target.value) })}
-                className="mt-2 h-1 w-full cursor-pointer appearance-none rounded-full bg-ink-700 accent-brand-500"
+                className="slider slider-dark mt-2.5"
+                aria-label="Shot level"
               />
             )}
           </div>
@@ -179,8 +183,8 @@ export function ClipInspector({
 
         {/* Titles */}
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="label mb-0">Titles</span>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="eyebrow-light">Titles</p>
             <button
               onClick={() =>
                 onDispatch({
@@ -197,19 +201,19 @@ export function ClipInspector({
                   },
                 })
               }
-              className="text-[11px] text-brand-400 hover:text-brand-300"
+              className="btn-quiet-dark px-0"
             >
               + Add
             </button>
           </div>
 
           {clip.titles.length === 0 ? (
-            <p className="text-[11px] text-ink-600">No text on this clip.</p>
+            <p className="font-mono text-2xs text-ink-500">Nothing written over this shot.</p>
           ) : (
             <div className="space-y-2">
               {clip.titles.map((title) => (
-                <div key={title.id} className="rounded-lg border border-ink-800 bg-ink-850/60 p-2">
-                  <div className="flex gap-1.5">
+                <div key={title.id} className="border border-[color:var(--hair-dark)] bg-ink-900 p-2">
+                  <div className="flex items-end gap-2">
                     <input
                       value={title.text}
                       onChange={(e) =>
@@ -220,7 +224,7 @@ export function ClipInspector({
                           patch: { text: e.target.value },
                         })
                       }
-                      className="input flex-1 px-2 py-1 text-xs"
+                      className="field-dark display-sm flex-1 py-1 text-base"
                       maxLength={200}
                       placeholder="Title text"
                     />
@@ -228,13 +232,13 @@ export function ClipInspector({
                       onClick={() =>
                         onDispatch({ type: "title.remove", clipId: clip.id, titleId: title.id })
                       }
-                      className="px-1 text-xs text-ink-600 hover:text-red-300"
+                      className="shrink-0 px-1 pb-1 font-mono text-2xs text-ink-400 hover:text-signal-400"
                     >
                       ✕
                     </button>
                   </div>
 
-                  <div className="mt-1.5 flex gap-1">
+                  <div className="mt-2 grid grid-cols-3 gap-px border border-[color:var(--hair-dark)]">
                     {(["top", "center", "bottom"] as const).map((pos) => (
                       <button
                         key={pos}
@@ -247,10 +251,10 @@ export function ClipInspector({
                           })
                         }
                         className={cn(
-                          "flex-1 rounded px-1 py-0.5 text-[10px] transition-colors",
+                          "py-1 font-mono text-2xs uppercase tracking-label transition-colors",
                           title.position === pos
-                            ? "bg-ink-700 text-white"
-                            : "text-ink-500 hover:text-ink-300",
+                            ? "bg-paper-100 text-ink-900"
+                            : "bg-ink-850 text-ink-400 hover:text-paper-100",
                         )}
                       >
                         {pos}
@@ -265,9 +269,9 @@ export function ClipInspector({
 
         <button
           onClick={() => onDispatch({ type: "clip.remove", clipId: clip.id })}
-          className="btn-danger w-full text-xs"
+          className="btn border-signal-700/50 bg-signal-900/30 w-full text-signal-300 hover:border-signal-500 hover:bg-signal-900/60"
         >
-          Remove clip from the cut
+          Lift this shot out
         </button>
       </div>
     </section>

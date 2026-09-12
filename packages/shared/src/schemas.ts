@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ACCEPTED_UPLOAD_TYPES,
+  CUT_OVERRIDES,
   MEDIA_KINDS,
   MUSIC_SOURCES,
   REACTION_SCORES,
@@ -76,8 +77,33 @@ export const reorderSelectionSchema = z.object({
   order: z.array(z.string().uuid()),
 });
 
+export const cutOverrideSchema = z.object({
+  targetType: z.enum(["media", "music"]),
+  targetId: z.string().uuid(),
+  /** null hands the item back to the cut line. */
+  override: z.enum(CUT_OVERRIDES).nullable(),
+});
+export type CutOverrideInput = z.infer<typeof cutOverrideSchema>;
+
+export const connectImmichSchema = z.object({
+  baseUrl: z.string().trim().min(1, "Enter the address of your Immich server"),
+  apiKey: z.string().trim().min(10, "That API key looks too short"),
+});
+export type ConnectImmichInput = z.infer<typeof connectImmichSchema>;
+
+export const immichImportSchema = z.object({
+  albumId: z.string().min(1),
+  /** Empty means "the whole album". */
+  assetIds: z.array(z.string()).default([]),
+});
+export type ImmichImportInput = z.infer<typeof immichImportSchema>;
+
 export const setStateSchema = z.object({
   state: z.enum(VLOG_STATES),
+});
+
+export const scoreThresholdSchema = z.object({
+  threshold: z.number().min(0).max(100),
 });
 
 export const mediaKindSchema = z.enum(MEDIA_KINDS);

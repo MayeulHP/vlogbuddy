@@ -197,7 +197,7 @@ Deliberate choices:
 apps/web      Next.js app + custom server hosting Socket.IO
 apps/worker   ffmpeg media pipeline + render jobs
 packages/db   Drizzle schema, migrations, client
-packages/shared  timeline model, zod schemas, realtime event contract
+packages/shared  timeline model, zod schemas, realtime event contract, Immich client
 ```
 
 The **timeline document** (`packages/shared/src/timeline.ts`) is the heart of it:
@@ -241,6 +241,40 @@ pnpm --filter @vlogbuddy/worker render-check /tmp/vbrender
 
 It covers straight cuts, mixed portrait/landscape letterboxing, crossfades,
 burned-in titles, music beds with ducking, and muted clips.
+
+---
+
+## Immich
+
+If your photos already live on your own [Immich](https://immich.app) server, you
+don't need to upload them again.
+
+Each person connects their **own** instance from inside a vlog — server address
+plus an API key from *Account Settings → API Keys*. The key is encrypted with
+AES-256-GCM (keyed off `SESSION_SECRET`), scoped to that one vlog, and never
+sent to anyone else's browser. Thumbnails are proxied through the app so the
+browser never sees the key either.
+
+**Importing.** Pick an album and hit *Import all*, or open it and choose
+individual shots. The worker pulls the originals server-to-server — the bytes
+never touch your phone — and each asset lands in the pile as a normal item with
+its real capture time, so the chronological ordering still works. Assets already
+in the vlog are skipped by content hash, so two people importing the same shared
+album doesn't double the pile.
+
+**Getting the media back out.** This is the part Immich can't do for you: two
+friends with two servers have no way to merge libraries. *Copy roll to my
+Immich* pushes every original in the vlog — everybody's, not just yours — into
+your instance as an album named after the vlog. It asks your server which files
+it already has first, so only what's missing is transferred and pressing it
+twice is harmless. Whoever brought the footage, everyone can keep the originals.
+
+> The app server is what talks to Immich, not the browser — so the address has
+> to be reachable **from the machine running VlogBuddy**. A LAN address like
+> `http://192.168.1.10:2283` is fine; `localhost` only works if Immich is on the
+> same host (inside Docker, `http://host.docker.internal:2283`). That also means
+> a member can point VlogBuddy at any address it can reach, so only hand share
+> links to people you'd trust with that.
 
 ---
 
@@ -298,8 +332,6 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 
 See [`TODO.md`](TODO.md). The headline items for v2:
 
-- **Immich integration** — import assets, or a whole album, straight from your
-  own Immich instance.
 - **Full multi-track editor** — more tracks, effects, keyframes, and CRDT-backed
   conflict-free co-editing.
 

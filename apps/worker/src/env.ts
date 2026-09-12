@@ -4,6 +4,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   PUBLIC_BASE_URL: z.string().url().optional(),
 
+  /** Same secret as the web app — it unseals stored Immich API keys. */
+  SESSION_SECRET: z.string().min(16),
+
   S3_ENDPOINT: z.string().url(),
   S3_REGION: z.string().default("us-east-1"),
   S3_BUCKET: z.string().min(1),
