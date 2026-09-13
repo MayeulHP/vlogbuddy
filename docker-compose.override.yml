@@ -1,4 +1,8 @@
+# Applied automatically by every `docker compose` invocation, including the
+# full-stack production run — so the bind is loopback-only. It exists because
+# the documented host dev flow (`pnpm dev` against `localhost:5432`) needs
+# Postgres published, and the base compose file deliberately doesn't publish it.
 services:
   postgres:
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
