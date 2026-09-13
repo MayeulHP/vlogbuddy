@@ -18,7 +18,9 @@ import {
   reconcileClips,
   runDirector,
   timelineDuration,
+  beatGridInFilmTime,
   type AudioTrack,
+  type BeatGrid,
   type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
@@ -54,6 +56,11 @@ interface MediaRow {
   durationSeconds: number | null;
   status: "pending" | "processing" | "ready" | "failed";
   cutOverride: "include" | "exclude" | null;
+  /** Audio uploads only: the beat grid the worker measured. */
+  bpm: number | null;
+  beatOffsetSeconds: number | null;
+  beatTimes: number[] | null;
+  beatConfidence: number | null;
 }
 
 function chronoCompare(a: MediaRow, b: MediaRow) {
@@ -108,6 +115,49 @@ function chooseBed(
   return best?.id ?? null;
 }
 
+/**
+ * A grid measured off a track nobody could hear a pulse in would retime the
+ * whole film on a guess. The analyser already refuses the hopeless cases; this
+ * is the second gate, on the value that survives in the row.
+ */
+const MIN_BEAT_CONFIDENCE = 0.2;
+
+interface BeatSource {
+  bpm: number | null;
+  beatOffsetSeconds: number | null;
+  beatTimes: number[] | null;
+  beatConfidence: number | null;
+}
+
+/**
+ * The music bed's beats, moved onto the film's clock — the bed's own start on
+ * the timeline and its offset into the track are both taken out here, so the
+ * director never has to know a bed exists.
+ *
+ * Null whenever there's nothing to snap to: no bed, an unanalysed track, or a
+ * tempo we don't believe. All three mean the cut is timed exactly as it was
+ * before any of this existed.
+ */
+function beatGridForBed(
+  doc: TimelineDoc,
+  media: (BeatSource & { id: string })[],
+  music: (BeatSource & { id: string })[],
+): BeatGrid | null {
+  const bed = doc.audio.find((t) => t.role === "bed");
+  if (!bed) return null;
+
+  const source = bed.mediaItemId
+    ? media.find((m) => m.id === bed.mediaItemId)
+    : bed.musicItemId
+      ? music.find((m) => m.id === bed.musicItemId)
+      : undefined;
+
+  if (!source || source.bpm === null) return null;
+  if ((source.beatConfidence ?? 0) < MIN_BEAT_CONFIDENCE) return null;
+
+  return beatGridInFilmTime(source, { startAt: bed.startAt, offset: bed.offset });
+}
+
 export interface SyncCutOptions {
   /** Re-derive the music bed's start from its position on the lane. */
   resyncBedStart?: boolean;
@@ -144,6 +194,10 @@ export async function syncCut(
           durationSeconds: mediaItems.durationSeconds,
           status: mediaItems.status,
           cutOverride: mediaItems.cutOverride,
+          bpm: mediaItems.bpm,
+          beatOffsetSeconds: mediaItems.beatOffsetSeconds,
+          beatTimes: mediaItems.beatTimes,
+          beatConfidence: mediaItems.beatConfidence,
         })
         .from(mediaItems)
         .where(eq(mediaItems.vlogId, vlogId)),
@@ -152,6 +206,10 @@ export async function syncCut(
           id: musicItems.id,
           timelinePosition: musicItems.timelinePosition,
           cutOverride: musicItems.cutOverride,
+          bpm: musicItems.bpm,
+          beatOffsetSeconds: musicItems.beatOffsetSeconds,
+          beatTimes: musicItems.beatTimes,
+          beatConfidence: musicItems.beatConfidence,
         })
         .from(musicItems)
         .where(eq(musicItems.vlogId, vlogId)),
@@ -277,7 +335,18 @@ export async function syncCut(
   // The auto-cut runs *before* the running time is measured: the music bed's
   // start is a fraction of that total, so it has to see the shot lengths the
   // director just chose rather than the raw source durations.
-  next = runDirector(next, { cut, threshold, settings: next.director });
+  //
+  // Which means the beat grid is read off the bed *as it currently stands*.
+  // A bed that has only just been chosen has no placement yet, so the first
+  // sync snaps against a grid starting at zero and the next one — after
+  // `reconcileAudio` has parked it on the lane — settles. Two revisions, then
+  // stable; reading the placement we're about to compute would be a loop.
+  next = runDirector(next, {
+    cut,
+    threshold,
+    settings: next.director,
+    beats: beatGridForBed(next, mediaRows as MediaRow[], musicRows),
+  });
 
   const totalDuration = timelineDuration(
     next,

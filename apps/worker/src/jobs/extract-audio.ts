@@ -6,6 +6,7 @@ import { db, eq, musicItems } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, uploadFile } from "../storage";
 import { probe } from "../ffmpeg";
+import { analyzeBeats } from "../beats";
 import { notifyMusicUpdated } from "../notify";
 
 export interface ExtractAudioJob {
@@ -64,6 +65,10 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
     const localPath = path.join(workDir, audioFile);
     const info = await probe(localPath).catch(() => null);
 
+    // While the file is on disk: where the beats are, so the auto-cut can put
+    // its cuts on them. Best-effort — no tempo just means no beat-snapping.
+    const beats = await analyzeBeats(localPath);
+
     const key = buildStorageKey(item.vlogId, "audio", item.id, audioFile);
     await uploadFile(key, localPath, "audio/mp4");
 
@@ -73,6 +78,10 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
         status: "ready",
         extractedAudioKey: key,
         audioDurationSeconds: info?.durationSeconds ?? null,
+        bpm: beats?.bpm ?? null,
+        beatOffsetSeconds: beats?.beatOffsetSeconds ?? null,
+        beatTimes: beats?.beatTimes ?? null,
+        beatConfidence: beats?.confidence ?? null,
         error: null,
       })
       .where(eq(musicItems.id, item.id));

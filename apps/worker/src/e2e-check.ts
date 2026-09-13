@@ -211,7 +211,7 @@ async function main() {
       ],
       audio: [],
       duckClipAudio: true,
-      director: { enabled: true, pace: "standard" as const, sceneText: false },
+      director: { enabled: true, pace: "standard" as const, sceneText: false, beatSnap: false },
     };
 
     await db.update(timelines).set({ doc, revision: 1 }).where(eq(timelines.vlogId, vlog.id));

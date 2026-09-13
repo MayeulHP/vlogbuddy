@@ -590,7 +590,7 @@ async function main() {
   const directed = runDirector(reconcileClips(emptyTimeline(), autoCut), {
     cut: autoCut,
     threshold: 0,
-    settings: { enabled: true, pace: "snappy", sceneText: true },
+    settings: { enabled: true, pace: "snappy", sceneText: true, beatSnap: false },
   });
   await runCase("director-output", directed, [m.p1, m.v1, m.p2, m.v2], files, null);
 

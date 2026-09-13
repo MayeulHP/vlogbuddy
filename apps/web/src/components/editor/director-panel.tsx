@@ -123,6 +123,24 @@ export function DirectorPanel({
         <label className="flex cursor-pointer items-start gap-2.5">
           <input
             type="checkbox"
+            checked={director.beatSnap}
+            disabled={locked || pending}
+            onChange={(e) => run({ settings: { beatSnap: e.target.checked } })}
+            className="mt-0.5 accent-paper-100"
+          />
+          <span>
+            <span className="block text-[13px] text-paper-100">Cut on the beat</span>
+            <span className="block text-2xs leading-relaxed text-ink-400">
+              Nudges each cut onto the nearest beat of the music. Shots keep the length
+              the crew&rsquo;s marks bought them — only the exact moment moves. Needs a
+              track with a pulse we could find; otherwise nothing changes.
+            </span>
+          </span>
+        </label>
+
+        <label className="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
             checked={director.enabled}
             disabled={locked || pending}
             onChange={(e) => run({ settings: { enabled: e.target.checked } })}

@@ -14,8 +14,10 @@
 import {
   applyTimelineOp, detectScenes, emptyTimeline, reconcileClips, runDirector,
   timelineDuration, clipDuration, sceneLabel, TRANSITION_LABELS,
-  type CutEntry, type TimelineDoc,
+  beatGridInFilmTime, clipStartTimes, nearestBeat,
+  type BeatGrid, type CutEntry, type TimelineDoc,
 } from "@vlogbuddy/shared";
+import { HOP_SECONDS, onsetEnvelope, trackBeats } from "./beats";
 
 let failed = 0;
 const ok = (pass: boolean, label: string, extra = "") => {
@@ -36,7 +38,11 @@ const cut: CutEntry[] = offsets.map((m, i) => ({
   rank: [0, 0, 1.2, 2.4, 0.9, 3.8, 0, 1.6, 0, 2.1][i],
 }));
 
-const input = { cut, threshold: 0, settings: { enabled: true, pace: "standard" as const, sceneText: true } };
+const input = {
+  cut,
+  threshold: 0,
+  settings: { enabled: true, pace: "standard" as const, sceneText: true, beatSnap: false },
+};
 
 // --- scenes -----------------------------------------------------------------
 const scenes = detectScenes(cut);
@@ -96,6 +102,133 @@ first.clips.forEach((c, i) => {
 // hold floor must stay clear of the renderer's transition clamp
 const floor = Math.min(...first.clips.map((c, i) => clipDuration(c, durations[c.mediaItemId])));
 ok(floor >= 0.7, "shortest hold stays above the renderer's transition clamp", `${floor.toFixed(2)}s`);
+
+// --- the beat ---------------------------------------------------------------
+// Two halves: the estimator can find a tempo in a signal, and the director
+// snaps to a grid without breaking either of its promises.
+
+console.log("\n   beat detection");
+
+/** A click track: a short burst every `period` seconds, deterministic. */
+function clickTrack(bpm: number, phase: number, seconds: number): Int16Array {
+  const rate = 22050;
+  const pcm = new Int16Array(rate * seconds);
+  let seed = 12345;
+  const noise = () => {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    return seed / 0x7fffffff - 1;
+  };
+  // A quiet floor, so the envelope isn't measuring silence between hits.
+  for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(noise() * 300);
+
+  const period = 60 / bpm;
+  for (let t = phase; t < seconds; t += period) {
+    const start = Math.round(t * rate);
+    for (let i = 0; i < 900 && start + i < pcm.length; i++) {
+      const decay = Math.exp(-i / 220);
+      pcm[start + i] = Math.round(noise() * 22000 * decay);
+    }
+  }
+  return pcm;
+}
+
+const measured = trackBeats(onsetEnvelope(clickTrack(100, 0.25, 30)));
+ok(measured !== null, "a 100 BPM click track yields a grid");
+if (measured) {
+  ok(Math.abs(measured.bpm - 100) < 2, "...at the right tempo", `${measured.bpm} BPM`);
+  ok(Math.abs(measured.beatOffsetSeconds - 0.25) < 0.05, "...and the right phase",
+     `${measured.beatOffsetSeconds}s`);
+  ok(measured.confidence > 0.2, "...with confidence to spare", measured.confidence.toFixed(2));
+  const spacing = measured.beatTimes.slice(1).map((t, i) => t - measured.beatTimes[i]);
+  const worst = Math.max(...spacing.map((s) => Math.abs(s - 0.6)));
+  ok(worst < HOP_SECONDS * 3, "...and evenly spaced beats", `worst ${worst.toFixed(3)}s`);
+}
+ok(trackBeats(new Float64Array(4000)) === null, "silence yields no tempo at all");
+
+// A bed 12s into the film, played from 4s into the track: the track's 4s beat
+// is the film's 12s.
+const grid = beatGridInFilmTime(
+  { bpm: 120, beatOffsetSeconds: 0, beatTimes: [0, 0.5, 1, 4] },
+  { startAt: 12, offset: 4 },
+);
+ok(grid?.firstBeat === 8, "a bed's placement moves its grid onto the film's clock",
+   `${grid?.firstBeat}`);
+
+// 120 BPM from the first frame, no measured beats — the periodic grid alone.
+const onTheBeat: BeatGrid = { bpm: 120, firstBeat: 0 };
+const beatInput = { ...input, settings: { ...input.settings, beatSnap: true }, beats: onTheBeat };
+
+const snapped = runDirector(doc, beatInput);
+const plain = runDirector(doc, input);
+
+// (f) every boundary either lands on a beat or was too far to reach one
+const starts = clipStartTimes(snapped, durations);
+let onBeat = 0;
+let overBudget = 0;
+snapped.clips.forEach((c, i) => {
+  const end = starts[c.id] + clipDuration(c, durations[c.mediaItemId]);
+  if (Math.abs(end - nearestBeat(end, onTheBeat)) < 0.002) onBeat++;
+  const was = clipDuration(plain.clips[i], durations[c.mediaItemId]);
+  const now = clipDuration(c, durations[c.mediaItemId]);
+  if (Math.abs(now - was) > was * 0.25 + 0.002) overBudget++;
+});
+ok(onBeat >= snapped.clips.length - 2, "cuts land on the beat",
+   `${onBeat}/${snapped.clips.length}`);
+ok(overBudget === 0, "and no shot was stretched past its budget to get there");
+ok(snapped !== plain, "beat-snapping actually retimed the cut");
+
+// (g) the identity contract, with a grid in play
+const snappedAgain = runDirector(snapped, beatInput);
+ok(snappedAgain === snapped, "running twice with beats returns the IDENTICAL object");
+/** Same film, ignoring the timestamp and the object identity. */
+const sameCut = (a: TimelineDoc, b: TimelineDoc) =>
+  JSON.stringify(a.clips) === JSON.stringify(b.clips);
+ok(sameCut(runDirector(doc, beatInput), snapped), "a second run from scratch produces the same film");
+// Every generated number must survive the trip through jsonb unchanged, or the
+// comparison above would flip on the *next* sync instead of this one.
+const roundTripped = JSON.parse(JSON.stringify(snapped)) as TimelineDoc;
+ok(runDirector(roundTripped, beatInput) === roundTripped, "and survives a jsonb round-trip");
+
+// (h) a hand-trimmed shot is still untouchable, and still anchors what follows
+const handEdited = applyTimelineOp(snapped, {
+  type: "clip.update", clipId: snapped.clips[2].id, patch: { trimEnd: 9.75 },
+});
+const afterHand = runDirector(handEdited, beatInput);
+ok(afterHand.clips[2].trimEnd === 9.75, "beat-snapping leaves a hand-trimmed shot alone");
+ok(afterHand.clips[2].auto.includes("timing") === false, "...because its timing flag is gone");
+const handStarts = clipStartTimes(afterHand, durations);
+const nextClip = afterHand.clips[3];
+const nextEnd = handStarts[nextClip.id] + clipDuration(nextClip, durations[nextClip.mediaItemId]);
+// Either the next cut still lands on a beat from its new anchor, or no beat was
+// close enough and it kept the length the marks bought it.
+const unsnappedNext = clipDuration(
+  runDirector(handEdited, input).clips[3], durations[nextClip.mediaItemId],
+);
+ok(Math.abs(nextEnd - nearestBeat(nextEnd, onTheBeat)) < 0.002 ||
+   clipDuration(nextClip, durations[nextClip.mediaItemId]) === unsnappedNext,
+   "and snaps what follows against where that really leaves the film",
+   `ends at ${nextEnd.toFixed(3)}s`);
+
+const legacyBeat: TimelineDoc = { ...snapped, clips: snapped.clips.map((c) => ({ ...c, auto: [] })) };
+ok(runDirector(legacyBeat, beatInput) === legacyBeat, "a fully hand-cut film ignores the beat entirely");
+
+// (i) the switch, and a grid we don't believe, both mean today's behaviour
+ok(sameCut(runDirector(doc, { ...input, beats: onTheBeat }), plain),
+   "beats with the switch off change nothing");
+ok(sameCut(runDirector(doc, { ...beatInput, beats: { bpm: 9, firstBeat: 0 } }), plain),
+   "an impossible tempo is ignored");
+ok(sameCut(runDirector(doc, { ...beatInput, beats: null }), plain), "no bed, no change");
+ok(runDirector(plain, { ...beatInput, beats: null }) === plain,
+   "...and a beatless re-run of a beatless cut writes nothing");
+
+console.log(
+  "\n   with beats: " +
+    snapped.clips
+      .map((c) => clipDuration(c, durations[c.mediaItemId]).toFixed(2))
+      .join("  ") +
+    "\n   without:    " +
+    plain.clips.map((c) => clipDuration(c, durations[c.mediaItemId]).toFixed(2)).join("  "),
+);
 
 console.log(failed === 0 ? "\nall checks passed" : `\n${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);
