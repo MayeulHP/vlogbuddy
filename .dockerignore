@@ -1,3 +1,6 @@
+# Anything that would bloat the build context or invalidate layers for no
+# reason. The context is sent to the daemon on every build — on a small machine
+# that copy is measurable, so keep it lean.
 node_modules
 **/node_modules
 .next
@@ -5,8 +8,19 @@ node_modules
 dist
 **/dist
 .git
+.github
 data
 tmp
 *.log
 .env
 .env.local
+.env.*.local
+
+# Build leftovers that change constantly and are never needed in an image.
+**/tsconfig.tsbuildinfo
+**/.turbo
+**/*.tsbuildinfo
+
+# Docs and scripts aren't part of any runtime.
+*.md
+scripts

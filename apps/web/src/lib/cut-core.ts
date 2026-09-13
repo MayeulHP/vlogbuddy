@@ -12,8 +12,11 @@ import {
 } from "@vlogbuddy/db";
 import {
   emptyTimeline,
+  normalizeTimeline,
+  pruneTimelineReferences,
   rankScore,
   reconcileClips,
+  runDirector,
   timelineDuration,
   type AudioTrack,
   type CutEntry,
@@ -253,12 +256,28 @@ export async function syncCut(
         mediaItemId: item.id,
         kind: item.kind === "video" ? ("video" as const) : ("photo" as const),
         durationSeconds: item.durationSeconds,
+        capturedAt: item.capturedAt?.getTime() ?? null,
+        rank: rankOf.get(`media:${item.id}`) ?? 0,
       },
     ];
   });
 
-  const current: TimelineDoc = timelineRow[0]?.doc ?? emptyTimeline();
-  let next = reconcileClips(current, cut);
+  const current: TimelineDoc = timelineRow[0]
+    ? normalizeTimeline(timelineRow[0].doc)
+    : emptyTimeline();
+
+  // Layers and hand-placed tracks aren't in the cut, but they do point at
+  // media — a photo swept from the pile can't stay pinned over shot four.
+  let next = pruneTimelineReferences(current, {
+    mediaIds: new Set(mediaRows.map((m) => m.id)),
+    musicIds: new Set(musicRows.map((m) => m.id)),
+  });
+  next = reconcileClips(next, cut);
+
+  // The auto-cut runs *before* the running time is measured: the music bed's
+  // start is a fraction of that total, so it has to see the shot lengths the
+  // director just chose rather than the raw source durations.
+  next = runDirector(next, { cut, threshold, settings: next.director });
 
   const totalDuration = timelineDuration(
     next,
@@ -294,8 +313,10 @@ export async function syncCut(
 
 /**
  * Keeps the music bed in step with the soundtrack lane — but never touches an
- * uploaded audio bed someone deliberately chose in the editor, and preserves
- * the volume and fades they dialled in for a track that's staying.
+ * uploaded audio bed someone deliberately chose in the editor, preserves the
+ * volume and fades they dialled in for a track that's staying, and leaves
+ * every hand-placed track alone. Only the one track marked `bed` belongs to
+ * the vote.
  */
 function reconcileAudio(
   audio: AudioTrack[],
@@ -303,28 +324,42 @@ function reconcileAudio(
   startAt: number,
   resyncStart: boolean,
 ): AudioTrack[] {
-  const existing = audio[0] ?? null;
+  const index = audio.findIndex((t) => t.role === "bed");
+  const existing = index === -1 ? null : audio[index];
   if (existing?.mediaItemId) return audio; // an uploaded file wins; leave it alone.
 
-  if (!bedMusicId) return audio.length === 0 ? audio : [];
+  if (!bedMusicId) {
+    if (!existing) return audio;
+    return audio.filter((_, i) => i !== index);
+  }
 
   if (existing?.musicItemId === bedMusicId) {
     // Same track as before — keep whatever was dialled in for it in the editor,
     // unless someone just dragged it along the soundtrack lane.
     if (!resyncStart || Math.abs(existing.startAt - startAt) < 0.05) return audio;
-    return [{ ...existing, startAt: Math.max(0, startAt) }, ...audio.slice(1)];
+    const next = [...audio];
+    next[index] = { ...existing, startAt: Math.max(0, startAt) };
+    return next;
   }
 
-  return [
-    {
-      musicItemId: bedMusicId,
-      mediaItemId: null,
-      offset: 0,
-      // A track parked halfway along the soundtrack lane kicks in halfway through.
-      startAt: Math.max(0, startAt),
-      volume: existing?.volume ?? 0.8,
-      fadeIn: existing?.fadeIn ?? 1,
-      fadeOut: existing?.fadeOut ?? 2,
-    },
-  ];
+  const bed: AudioTrack = {
+    id: existing?.id ?? globalThis.crypto.randomUUID(),
+    role: "bed",
+    musicItemId: bedMusicId,
+    mediaItemId: null,
+    offset: 0,
+    // A track parked halfway along the soundtrack lane kicks in halfway through.
+    startAt: Math.max(0, startAt),
+    duration: existing?.duration ?? null,
+    volume: existing?.volume ?? 0.8,
+    fadeIn: existing?.fadeIn ?? 1,
+    fadeOut: existing?.fadeOut ?? 2,
+    muted: existing?.muted ?? false,
+    loop: existing?.loop ?? false,
+  };
+
+  if (index === -1) return [bed, ...audio];
+  const next = [...audio];
+  next[index] = bed;
+  return next;
 }

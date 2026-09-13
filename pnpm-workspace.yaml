@@ -1,3 +1,10 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# pnpm 10 refuses to run install scripts unless they're named here. esbuild
+# links its own platform binary in a postinstall and tsx won't start without
+# it, so it has to be allowed — declared rather than approved interactively so
+# that a Docker build (which has no TTY) behaves like a local install.
+onlyBuiltDependencies:
+  - esbuild

@@ -162,7 +162,7 @@ async function main() {
     ok(false, "need 2 processed clips to render");
   } else {
     const doc = {
-      version: 1 as const,
+      version: 2 as const,
       clips: ready.map((r, i) => ({
         id: crypto.randomUUID(),
         mediaItemId: r.id,
@@ -186,9 +186,32 @@ async function main() {
                 color: "#ffffff",
               }]
             : [],
+        auto: [],
       })),
+      // One layer over the second shot, so the whole multi-track path — extra
+      // input, overlay, clipping to the picture — is exercised for real.
+      layers: [
+        {
+          id: crypto.randomUUID(),
+          mediaItemId: ready[1].id,
+          kind: "video" as const,
+          layer: 1,
+          startAt: 1.5,
+          trimStart: 0,
+          duration: 1.5,
+          x: 0.6,
+          y: 0.08,
+          width: 0.3,
+          opacity: 0.9,
+          fadeIn: 0.3,
+          fadeOut: 0.3,
+          volume: 1,
+          muted: true,
+        },
+      ],
       audio: [],
       duckClipAudio: true,
+      director: { enabled: true, pace: "standard" as const, sceneText: false },
     };
 
     await db.update(timelines).set({ doc, revision: 1 }).where(eq(timelines.vlogId, vlog.id));

@@ -137,9 +137,28 @@ export const mediaItems = pgTable(
      * uploads, and copied straight from the asset for Immich imports.
      */
     checksumSha1: text("checksum_sha1"),
+
+    /**
+     * Audio uploads only: the same beat grid `music_items` carries, because an
+     * uploaded track is just as likely to be the bed as a YouTube link is.
+     * Seconds from the start of the file.
+     */
+    bpm: doublePrecision("bpm"),
+    beatOffsetSeconds: doublePrecision("beat_offset_seconds"),
+    beatTimes: jsonb("beat_times").$type<number[]>(),
+    beatConfidence: doublePrecision("beat_confidence"),
+
     /** Where this came from, when it came from somebody's Immich. */
     immichAssetId: text("immich_asset_id"),
     immichAlbumName: text("immich_album_name"),
+
+    /**
+     * Set when the admin has swept the source files out of storage after a
+     * render. The row stays — we still want the credits, the votes and the
+     * shape of the cut — but the bytes are gone and nothing should try to
+     * presign them.
+     */
+    prunedAt: timestamp("pruned_at", { withTimezone: true }),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -150,6 +169,30 @@ export const mediaItems = pgTable(
     checksumIdx: index("media_items_checksum_idx").on(t.vlogId, t.checksumSha1),
   }),
 );
+
+// --- instance settings ------------------------------------------------------
+
+/**
+ * One row, always. Settings the operator can change without editing .env and
+ * restarting — the export format, mostly, which is the thing you actually want
+ * to fiddle with once you've seen a render come out too big for the Pi.
+ *
+ * Env vars still provide the first-boot defaults; after that this wins.
+ */
+export const appSettings = pgTable("app_settings", {
+  /** Always `true` — a one-row table that can't accidentally grow. */
+  id: boolean("id").primaryKey().default(true),
+
+  /** Output height in pixels; width follows from 16:9. */
+  renderHeight: integer("render_height").notNull().default(1080),
+  renderFps: integer("render_fps").notNull().default(30),
+  /** x264 quality, lower is better. 18 is visually lossless, 28 is rough. */
+  renderCrf: integer("render_crf").notNull().default(20),
+  /** x264 speed/size trade-off — "veryfast" is the sane default on a Pi. */
+  renderPreset: text("render_preset").notNull().default("veryfast"),
+
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 // --- immich -----------------------------------------------------------------
 
@@ -258,6 +301,19 @@ export const musicItems = pgTable(
     /** Populated by yt-dlp when ENABLE_YT_AUDIO is on. */
     extractedAudioKey: text("extracted_audio_key"),
     audioDurationSeconds: doublePrecision("audio_duration_seconds"),
+
+    /**
+     * The beat grid, measured by the worker off the extracted audio. `bpm`
+     * plus `beatOffsetSeconds` is the whole story — `beatTimes` is the first
+     * couple of minutes as actually measured, which is enough for the
+     * auto-cut to snap the opening of a film to a beat the ear agrees with.
+     * Seconds from the start of the *track*, not the film.
+     */
+    bpm: doublePrecision("bpm"),
+    beatOffsetSeconds: doublePrecision("beat_offset_seconds"),
+    beatTimes: jsonb("beat_times").$type<number[]>(),
+    /** 0..1. Low means the envelope had no periodicity worth trusting. */
+    beatConfidence: doublePrecision("beat_confidence"),
     status: processingStatusEnum("status").notNull().default("pending"),
     error: text("error"),
 
@@ -454,3 +510,4 @@ export type PendingUpload = typeof pendingUploads.$inferSelect;
 export type ImmichConnection = typeof immichConnections.$inferSelect;
 export type NewImmichConnection = typeof immichConnections.$inferInsert;
 export type ImmichTransfer = typeof immichTransfers.$inferSelect;
+export type AppSettings = typeof appSettings.$inferSelect;

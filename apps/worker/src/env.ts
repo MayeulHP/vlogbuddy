@@ -19,6 +19,10 @@ const envSchema = z.object({
     .transform((v) => v === "true" || v === "1"),
 
   RENDER_CONCURRENCY: z.coerce.number().default(1),
+  /**
+   * First-boot defaults only. Once the admin has saved the export format on
+   * /admin, the database row wins and changing these does nothing.
+   */
   RENDER_HEIGHT: z.coerce.number().default(1080),
   RENDER_FPS: z.coerce.number().default(30),
 

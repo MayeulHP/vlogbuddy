@@ -20,12 +20,12 @@
   "dependencies": {
     "@vlogbuddy/shared": "workspace:*",
     "drizzle-orm": "^0.36.4",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",
     "drizzle-kit": "^0.28.1",
-    "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }
 }

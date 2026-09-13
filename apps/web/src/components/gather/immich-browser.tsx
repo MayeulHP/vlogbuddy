@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatDuration, type ImmichAlbum } from "@vlogbuddy/shared";
+import { formatDuration, formatMonthYear, type ImmichAlbum } from "@vlogbuddy/shared";
 import {
   listImmichAlbumAssetsAction,
   listImmichAlbumsAction,
@@ -391,10 +391,9 @@ function Loading({ label }: { label: string }) {
 }
 
 function dateRange(album: ImmichAlbum): string {
-  const fmt = (v: string) =>
-    new Date(v).toLocaleDateString(undefined, { month: "short", year: "numeric" });
   if (!album.startDate) return "";
-  const start = fmt(album.startDate);
-  const end = album.endDate ? fmt(album.endDate) : start;
+  const start = formatMonthYear(album.startDate);
+  if (!start) return "";
+  const end = (album.endDate ? formatMonthYear(album.endDate) : start) ?? start;
   return start === end ? start : `${start} – ${end}`;
 }

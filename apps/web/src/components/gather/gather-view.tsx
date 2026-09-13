@@ -161,7 +161,7 @@ export function GatherView({
           memberId={memberId}
           crew={crew}
           mediaCount={Math.max(footage.length, 1)}
-          bedMusicId={timeline.audio[0]?.musicItemId ?? null}
+          bedMusicId={timeline.audio.find((t) => t.role === "bed")?.musicItemId ?? null}
           canEdit
         />
 

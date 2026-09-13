@@ -120,9 +120,114 @@ export const RENDER_STATUSES = [
 ] as const;
 export type RenderStatus = (typeof RENDER_STATUSES)[number];
 
+/**
+ * How one shot gives way to the next.
+ *
+ * A curated set, not the whole of `xfade` — FFmpeg offers thirty-odd and most
+ * of them belong in a 2004 slideshow. These are the ones with an actual
+ * editorial meaning, named the way an editor would name them rather than the
+ * way the filter does.
+ */
+export const TRANSITIONS = [
+  "cut",
+  "crossfade",
+  "dipblack",
+  "dipwhite",
+  "wipeleft",
+  "wiperight",
+  "pushleft",
+  "pushright",
+  "irisopen",
+  "irisclose",
+  "pixelize",
+] as const;
+export type Transition = (typeof TRANSITIONS)[number];
+
+export const TRANSITION_LABELS: Record<Transition, string> = {
+  cut: "Cut",
+  crossfade: "Dissolve",
+  dipblack: "Dip to black",
+  dipwhite: "Dip to white",
+  wipeleft: "Wipe left",
+  wiperight: "Wipe right",
+  pushleft: "Push left",
+  pushright: "Push right",
+  irisopen: "Iris open",
+  irisclose: "Iris close",
+  pixelize: "Pixelate",
+};
+
+/** One glyph each, for the badge on a shot in the strip. */
+export const TRANSITION_GLYPHS: Record<Transition, string> = {
+  cut: "|",
+  crossfade: "\u21C4",
+  dipblack: "\u25D0",
+  dipwhite: "\u25D1",
+  wipeleft: "\u25C0",
+  wiperight: "\u25B6",
+  pushleft: "\u00AB",
+  pushright: "\u00BB",
+  irisopen: "\u25CB",
+  irisclose: "\u25CF",
+  pixelize: "\u25A6",
+};
+
+/**
+ * What each one compiles to in FFmpeg's `xfade` filter. `cut` is the only
+ * value with no transition at all — everything else overlaps its predecessor
+ * by `transitionDuration`, which is why so much of the timing code asks this
+ * question rather than comparing against `"crossfade"`.
+ */
+export const XFADE_FOR: Record<Transition, string | null> = {
+  cut: null,
+  crossfade: "fade",
+  dipblack: "fadeblack",
+  dipwhite: "fadewhite",
+  wipeleft: "wipeleft",
+  wiperight: "wiperight",
+  pushleft: "slideleft",
+  pushright: "slideright",
+  irisopen: "circleopen",
+  irisclose: "circleclose",
+  pixelize: "pixelize",
+};
+
+/** Does this transition overlap the shot before it? */
+export function overlapsPrevious(transition: Transition): boolean {
+  return XFADE_FOR[transition] !== null;
+}
+
 /** Photos have no intrinsic duration; this is how long they hold on screen. */
 export const DEFAULT_PHOTO_DURATION = 3;
 export const DEFAULT_TRANSITION_DURATION = 0.5;
+
+/**
+ * How hard the auto-cut cuts. The only knob the crew gets: everything else
+ * about the default cut is a film-making opinion, and an opinion you can turn
+ * off isn't one.
+ */
+export const PACE_PRESETS = ["snappy", "standard", "relaxed"] as const;
+export type Pace = (typeof PACE_PRESETS)[number];
+
+export const PACE_LABELS: Record<Pace, string> = {
+  snappy: "Snappy",
+  standard: "Standard",
+  relaxed: "Relaxed",
+};
+
+export const PACE_BLURBS: Record<Pace, string> = {
+  snappy: "Cut hard. Nothing outstays its welcome.",
+  standard: "Room to breathe, but keep moving.",
+  relaxed: "Let the good shots run.",
+};
+
+/**
+ * The parts of a clip the auto-cut owns until somebody touches them by hand.
+ * A flag survives on a clip only while nobody has overruled that decision, so
+ * re-running the cut never walks over anyone's work.
+ */
+export const AUTO_FIELDS = ["timing", "transition", "title", "audio"] as const;
+export type AutoField = (typeof AUTO_FIELDS)[number];
 
 export const ACCEPTED_IMAGE_TYPES = [
   "image/jpeg",

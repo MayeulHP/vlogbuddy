@@ -11,6 +11,7 @@ import {
   colorForMember,
   isWorkingState,
   roomForVlog,
+  normalizeTimeline,
   timelineOpSchema,
   emptyTimeline,
   type ClientToServerEvents,
@@ -191,7 +192,7 @@ async function main() {
     socket.on("timeline:request", async () => {
       const [row] = await db.select().from(timelines).where(eq(timelines.vlogId, vlogId)).limit(1);
       socket.emit("timeline:sync", {
-        timeline: row?.doc ?? emptyTimeline(),
+        timeline: row ? normalizeTimeline(row.doc) : emptyTimeline(),
         revision: row?.revision ?? 0,
       });
     });
@@ -228,7 +229,7 @@ async function main() {
             .for("update")
             .limit(1);
 
-          const doc = current?.doc ?? emptyTimeline();
+          const doc = current ? normalizeTimeline(current.doc) : emptyTimeline();
           const nextDoc = applyTimelineOp(doc, parsed.data);
           const nextRevision = (current?.revision ?? 0) + 1;
 

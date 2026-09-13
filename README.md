@@ -19,7 +19,7 @@ A vlog moves through five phases. The creator drives it forward.
 |---|---|
 | **📥 Dump & vote** | Friends upload photos/videos and paste music links. Everyone reacts with three emoji that double as a score. |
 | **⭐ Curate** | The pile is sorted by vote. Pick the keepers and lock the running order. |
-| **✂️ Edit** | The vlog is **already assembled** from the winners. Trim, reorder, add titles, pick the music bed — together, live. |
+| **✂️ Edit** | The vlog is **already assembled** from the winners. Trim, reorder, add titles, lay shots over the cut, stack up the sound — together, live. |
 | **⚙️ Render** | FFmpeg stitches the real thing server-side. Progress streams to everyone. |
 | **🎉 Published** | Watch and download the MP4. |
 
@@ -240,7 +240,11 @@ pnpm --filter @vlogbuddy/worker render-check /tmp/vbrender
 ```
 
 It covers straight cuts, mixed portrait/landscape letterboxing, crossfades,
-burned-in titles, music beds with ducking, and muted clips.
+burned-in titles, music beds with ducking, muted clips, picture layers
+(stacked, faded, clipped to the picture) and multiple audio cues in one mix.
+Titles and layers aren't just checked for a valid MP4 — each is re-rendered
+with the feature removed and the frames compared, because a filter that
+silently draws nothing still produces a perfectly valid file.
 
 ---
 
@@ -309,11 +313,37 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 | `PUBLIC_BASE_URL` | — | Public origin of the app. Builds share links. |
 | `PUBLIC_STORAGE_URL` | — | Public origin of MinIO. Browsers hit this directly. |
 | `CORS_ALLOW_ORIGIN` | `PUBLIC_BASE_URL` | MinIO + Socket.IO allowed Origin. Set `*` for IP / no-domain access. |
-| `SESSION_SECRET` | — | `openssl rand -hex 32`. Signs member cookies. (`setup-env.sh` generates this.) |
+| `SESSION_SECRET` | — | `openssl rand -hex 32`. Signs member cookies and encrypts stored Immich keys. Needed by **both** web and worker, same value. (`setup-env.sh` generates it.) |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / — | Guards `/admin` and creating vlogs. Empty password seals the admin area. (`setup-env.sh` generates the password.) |
 | `MAX_UPLOAD_MB` | `2048` | Per-file upload limit. |
-| `RENDER_HEIGHT` / `RENDER_FPS` | `1080` / `30` | Output resolution. |
+| `RENDER_HEIGHT` / `RENDER_FPS` | `1080` / `30` | First-boot defaults only — the export format is set on `/admin` after that. |
 | `RENDER_CONCURRENCY` | `1` | Raise only if the host has CPU to spare. |
 | `ENABLE_YT_AUDIO` | `false` | See the warning above. |
+
+---
+
+## The admin page
+
+Everything a guest touches is open: the share link, the cutting room, the
+finished film. What isn't is `/admin`, behind HTTP Basic Auth
+(`ADMIN_USER` / `ADMIN_PASSWORD`). Serve the instance over HTTPS — Basic
+credentials are base64, not encrypted. Leaving `ADMIN_PASSWORD` empty seals the
+admin area off entirely.
+
+It does three things:
+
+- **Starts rolls.** Creating a vlog spends this box's disk and CPU, so it
+  belongs to whoever runs the box. Friends still need nothing but the link.
+- **Sets the export format** — frame size, frame rate, quality and encoder
+  preset. These used to be env vars, which meant editing `.env` and restarting
+  to discover that 1080p60 is too much for the machine. Changes apply to the
+  next render.
+- **Frees the disk.** Once a film is rendered, the source footage behind it is
+  almost all of the space it occupies. *Sweep sources* deletes the originals,
+  proxies and thumbnails and keeps the film, the credits and the votes — the
+  vlog stays readable as a record of the trip, it just can't be re-edited or
+  re-rendered. The button is only offered once something has actually been
+  rendered, so there's no way to sweep a trip you haven't cut yet.
 
 ---
 
@@ -332,8 +362,9 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 
 See [`TODO.md`](TODO.md). The headline items for v2:
 
-- **Full multi-track editor** — more tracks, effects, keyframes, and CRDT-backed
-  conflict-free co-editing.
+- **More of the editor** — effects, keyframes, a bigger transitions library, and
+  CRDT-backed conflict-free co-editing. (Multiple video and audio tracks landed;
+  see [`TODO.md`](TODO.md).)
 
 ---
 

@@ -105,6 +105,7 @@ set_kv() {
 postgres_password="$(rand_hex 24)"
 s3_secret="$(rand_hex 24)"
 session_secret="$(rand_hex 32)"
+admin_password="$(rand_hex 12)"
 postgres_user="vlogbuddy"
 postgres_db="vlogbuddy"
 
@@ -113,6 +114,7 @@ cp "$example" "$target"
 set_kv POSTGRES_PASSWORD "$postgres_password"
 set_kv S3_SECRET_KEY "$s3_secret"
 set_kv SESSION_SECRET "$session_secret"
+set_kv ADMIN_PASSWORD "$admin_password"
 set_kv DATABASE_URL "postgres://${postgres_user}:${postgres_password}@localhost:5432/${postgres_db}"
 
 if [[ "$lan" -eq 1 ]]; then
@@ -136,6 +138,10 @@ fi
 
 echo "wrote $target"
 echo "  POSTGRES_PASSWORD, S3_SECRET_KEY, SESSION_SECRET: generated"
+echo
+echo "  Admin login for /admin (also required to create vlogs):"
+echo "    user:     admin"
+echo "    password: $admin_password"
 if [[ "$lan" -eq 1 ]]; then
   echo "  PUBLIC_BASE_URL=http://${host}:${web_port:-3000}"
   echo "  PUBLIC_STORAGE_URL=http://${host}:${s3_port:-9000}"

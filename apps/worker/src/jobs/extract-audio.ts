@@ -6,6 +6,7 @@ import { db, eq, musicItems } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, uploadFile } from "../storage";
 import { probe } from "../ffmpeg";
+import { notifyMusicUpdated } from "../notify";
 
 export interface ExtractAudioJob {
   musicItemId: string;
@@ -44,10 +45,12 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
         error: `${item.source} is DRM-protected — upload an audio file to use it in the render`,
       })
       .where(eq(musicItems.id, item.id));
+    await notifyMusicUpdated(item.vlogId, item.id);
     return;
   }
 
   await db.update(musicItems).set({ status: "processing" }).where(eq(musicItems.id, item.id));
+  await notifyMusicUpdated(item.vlogId, item.id);
 
   const workDir = await mkdtemp(path.join(env().TMP_DIR ?? tmpdir(), "audio-"));
 
@@ -74,6 +77,10 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
       })
       .where(eq(musicItems.id, item.id));
 
+    // The editor holds a presigned URL that didn't exist a moment ago, so tell
+    // the room to re-read the track rather than making someone reload.
+    await notifyMusicUpdated(item.vlogId, item.id);
+
     console.log(`[extract-audio] ${item.id} ready`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -82,6 +89,7 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
       .update(musicItems)
       .set({ status: "failed", error: message.slice(0, 1000) })
       .where(eq(musicItems.id, item.id));
+    await notifyMusicUpdated(item.vlogId, item.id);
     throw err;
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});

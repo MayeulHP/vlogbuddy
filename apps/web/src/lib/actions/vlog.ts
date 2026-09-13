@@ -22,11 +22,20 @@ import {
   verifyPasscode,
   getCurrentMember,
 } from "../session";
+import { requireAdmin } from "../admin";
 import { emitToVlog } from "../realtime";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 export async function createVlogAction(formData: FormData) {
+  // Creating a vlog spends this box's disk and CPU, so it belongs to whoever
+  // runs the box. Guests still need nothing but the share link.
+  try {
+    await requireAdmin();
+  } catch (err) {
+    return { ok: false as const, error: err instanceof Error ? err.message : "Not allowed" };
+  }
+
   const parsed = createVlogSchema.safeParse({
     title: formData.get("title"),
     description: formData.get("description") || undefined,

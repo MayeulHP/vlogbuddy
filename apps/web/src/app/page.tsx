@@ -1,5 +1,5 @@
 import { FLOW_STAGES } from "@vlogbuddy/shared";
-import { CreateVlogForm } from "@/components/create-vlog-form";
+import Link from "next/link";
 import { EmptyFrames, Perfs, Wordmark } from "@/components/brand";
 
 /**
@@ -59,16 +59,25 @@ export default function HomePage() {
           <div className="lg:col-span-5">
             <div className="sheet crop-marks shadow-print">
               <div className="flex items-baseline justify-between border-b border-[color:var(--hair-strong)] px-5 py-3">
-                <h2 className="headline text-2xl">Start a roll</h2>
-                <span className="eyebrow">Form 01</span>
+                <h2 className="headline text-2xl">Got a link?</h2>
+                <span className="eyebrow">Call sheet</span>
               </div>
-              <div className="px-5 py-5">
-                <CreateVlogForm />
+              <div className="space-y-4 px-5 py-5">
+                <p className="text-[13px] leading-relaxed text-ink-700">
+                  Open it and pick a name. That&apos;s the whole sign-up — no account, no
+                  app, no password.
+                </p>
+                <p className="text-[13px] leading-relaxed text-ink-700">
+                  Rolls are started by whoever runs this box, because the footage lives on
+                  their disk. Ask them for a link.
+                </p>
               </div>
               <div className="border-t border-[color:var(--hair)] bg-paper-100 px-5 py-3">
                 <p className="font-mono text-2xs leading-relaxed text-ink-500">
-                  Got a link from a friend? Open it and pick a name — that&apos;s the whole
-                  sign-up.
+                  Run this box yourself?{" "}
+                  <Link href="/admin" className="text-signal-600 underline-offset-2 hover:underline">
+                    Projection booth →
+                  </Link>
                 </p>
               </div>
             </div>

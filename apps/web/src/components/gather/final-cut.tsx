@@ -3,9 +3,12 @@
 import { useMemo, useState, useTransition } from "react";
 import {
   clipDuration,
+  detectScenes,
   estimatedClipDuration,
   formatDuration,
+  sceneLabel,
   timelineDuration,
+  type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
@@ -68,6 +71,28 @@ export function FinalCut({
     );
   }, [timeline.clips, byId, pendingOrder]);
 
+  /**
+   * Where the trip breaks into scenes. The same detection the auto-cut uses,
+   * run here over the rough cut so the strip reads as days and outings rather
+   * than an undifferentiated run of thumbnails — and so the dissolves the cut
+   * puts at each break have something visible to correspond to.
+   */
+  const sceneLabels = useMemo(() => {
+    const entries: CutEntry[] = inCut.map(({ clip, item }) => ({
+      mediaItemId: item.id,
+      kind: clip.kind,
+      durationSeconds: item.durationSeconds,
+      capturedAt: item.capturedAt ? new Date(item.capturedAt).getTime() : null,
+      rank: item.reactions.rank,
+    }));
+    const out = new Map<number, string>();
+    detectScenes(entries).forEach((scene, n) => {
+      const label = sceneLabel(scene, n);
+      if (label) out.set(scene.startIndex, label);
+    });
+    return out;
+  }, [inCut]);
+
   const leftOut = useMemo(() => {
     const inCutIds = new Set(timeline.clips.map((c) => c.mediaItemId));
     return media
@@ -76,7 +101,11 @@ export function FinalCut({
   }, [media, timeline.clips]);
 
   const total = timelineDuration(timeline, durations);
-  const bed = music.find((t) => timeline.audio[0]?.musicItemId === t.id) ?? null;
+  // The bed is the one track the crew votes on; anything else in the stack was
+  // hand-placed on the bench and is only reported here, not editable.
+  const bedTrack = timeline.audio.find((t) => t.role === "bed") ?? null;
+  const bed = music.find((t) => bedTrack?.musicItemId === t.id) ?? null;
+  const extraCues = timeline.audio.filter((t) => t.role !== "bed").length;
   const pinned = media.filter((m) => m.cutOverride).length;
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>) {
@@ -153,6 +182,18 @@ export function FinalCut({
             <div className="flex items-stretch">
               {inCut.map(({ clip, item }, index) => (
                 <div key={clip.id} className="flex shrink-0 items-stretch">
+                  {sceneLabels.has(index) && (
+                    <div
+                      className={cn(
+                        "flex shrink-0 items-end pb-1 pl-2 pr-1",
+                        index > 0 && "ml-1 border-l border-dashed border-ink-600",
+                      )}
+                    >
+                      <span className="whitespace-nowrap font-mono text-2xs uppercase tracking-label text-ink-400">
+                        {sceneLabels.get(index)}
+                      </span>
+                    </div>
+                  )}
                   <DropSlot
                     active={dragOverIndex === index && Boolean(draggingId)}
                     onOver={() => setDragOverIndex(index)}
@@ -260,7 +301,7 @@ export function FinalCut({
                 <span className="min-w-0 flex-1 truncate text-xs text-paper-200">
                   {bed.title ?? bed.url}
                   <span className="timecode ml-2 text-2xs text-ink-400">
-                    in at {formatDuration(timeline.audio[0]?.startAt ?? 0)}
+                    in at {formatDuration(bedTrack?.startAt ?? 0)}
                   </span>
                 </span>
                 <button
@@ -272,13 +313,18 @@ export function FinalCut({
                   ✕
                 </button>
               </>
-            ) : timeline.audio[0]?.mediaItemId ? (
+            ) : bedTrack?.mediaItemId ? (
               <span className="text-xs text-ink-300">An uploaded audio file is the bed.</span>
             ) : (
               <span className="font-mono text-2xs uppercase tracking-label text-ink-500">
                 {music.length > 0
                   ? "Running dry — pick a track in the sound lane"
                   : "No sound yet"}
+              </span>
+            )}
+            {extraCues > 0 && (
+              <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-500">
+                +{extraCues} cue{extraCues === 1 ? "" : "s"} on the bench
               </span>
             )}
           </div>
@@ -327,7 +373,13 @@ export function FinalCut({
                       </span>
                     )}
                     <span className="absolute bottom-0 right-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200">
-                      {formatDuration(estimatedClipDuration(item.kind, item.durationSeconds))}
+                      {formatDuration(
+                        estimatedClipDuration(item.kind, item.durationSeconds, {
+                          pace: timeline.director.pace,
+                          rank: item.reactions.rank,
+                          mediaItemId: item.id,
+                        }),
+                      )}
                     </span>
                   </button>
                 ))}

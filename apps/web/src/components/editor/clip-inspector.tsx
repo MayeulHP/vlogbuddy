@@ -1,6 +1,15 @@
 "use client";
 
-import { formatDuration, clipDuration, type Clip, type TimelineOp } from "@vlogbuddy/shared";
+import {
+  TRANSITIONS,
+  TRANSITION_GLYPHS,
+  TRANSITION_LABELS,
+  clipDuration,
+  formatDuration,
+  overlapsPrevious,
+  type Clip,
+  type TimelineOp,
+} from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
 
@@ -21,8 +30,20 @@ export function ClipInspector({
   const sourceDuration = media?.durationSeconds ?? null;
   const effective = clipDuration(clip, sourceDuration);
 
+  const trimmedAway = sourceDuration === null ? 0 : sourceDuration - effective;
+
   function patch(p: Partial<Omit<Clip, "id">>) {
     onDispatch({ type: "clip.update", clipId: clip.id, patch: p });
+  }
+
+  /** Opens the trim window by `seconds`, split either side, within the source. */
+  function grow(seconds: number) {
+    if (sourceDuration === null) return;
+    const end = clip.trimEnd ?? sourceDuration;
+    const half = seconds / 2;
+    const trimStart = Math.max(0, Math.min(clip.trimStart - half, sourceDuration - 1.2));
+    const trimEnd = Math.min(sourceDuration, Math.max(end + half, trimStart + 1.2));
+    patch({ trimStart: Math.round(trimStart * 100) / 100, trimEnd: Math.round(trimEnd * 100) / 100 });
   }
 
   return (
@@ -88,12 +109,44 @@ export function ClipInspector({
                 />
               </label>
 
-              <button
-                onClick={() => patch({ trimStart: 0, trimEnd: sourceDuration })}
-                className="btn-quiet-dark px-0"
-              >
-                Reset trim
-              </button>
+              {/*
+                The auto-cut takes a few seconds out of the middle of a long
+                clip, so "there's more where that came from" has to be visible
+                and one press away — otherwise a trimmed shot reads as a lost
+                one. Both buttons grow the window around its current centre.
+              */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => grow(-5)}
+                  disabled={effective <= 1.2}
+                  className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+                >
+                  − 5s
+                </button>
+                <button
+                  onClick={() => grow(5)}
+                  disabled={trimmedAway < 0.1}
+                  className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+                >
+                  + 5s
+                </button>
+                <button
+                  onClick={() => patch({ trimStart: 0, trimEnd: sourceDuration })}
+                  disabled={trimmedAway < 0.1}
+                  className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+                >
+                  Use all {formatDuration(sourceDuration)}
+                </button>
+              </div>
+
+              {trimmedAway >= 0.1 && (
+                <p className="text-2xs leading-relaxed text-ink-400">
+                  Using {formatDuration(effective)} of {formatDuration(sourceDuration)}
+                  {clip.auto.includes("timing")
+                    ? " — the auto-cut's pick. Stretch it and it's yours."
+                    : "."}
+                </p>
+              )}
             </div>
           </div>
         ) : (
@@ -115,19 +168,24 @@ export function ClipInspector({
         <div>
           <p className="eyebrow-light mb-1.5">Comes in on</p>
           <div className="grid grid-cols-2 gap-px border border-[color:var(--hair-dark)]">
-            {(["cut", "crossfade"] as const).map((mode) => (
+            {TRANSITIONS.map((mode) => (
               <button
                 key={mode}
                 onClick={() => patch({ transitionIn: mode })}
                 disabled={index === 0}
+                title={TRANSITION_LABELS[mode]}
                 className={cn(
-                  "py-2 font-mono text-2xs uppercase tracking-label transition-colors disabled:opacity-30",
+                  "flex items-center justify-center gap-1.5 py-2 font-mono text-2xs uppercase tracking-label transition-colors disabled:opacity-30",
+                  // A cut is the norm, so it gets the full width and sits apart
+                  // from the eleven ways of not cutting.
+                  mode === "cut" && "col-span-2",
                   clip.transitionIn === mode
                     ? "bg-signal-600 text-paper-50"
                     : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
                 )}
               >
-                {mode === "cut" ? "A cut" : "⇄ Dissolve"}
+                <span aria-hidden>{TRANSITION_GLYPHS[mode]}</span>
+                {TRANSITION_LABELS[mode]}
               </button>
             ))}
           </div>
@@ -136,7 +194,7 @@ export function ClipInspector({
               The first shot has nothing to come in from.
             </p>
           )}
-          {clip.transitionIn === "crossfade" && index > 0 && (
+          {overlapsPrevious(clip.transitionIn) && index > 0 && (
             <label className="mt-2.5 block">
               <span className="timecode text-2xs text-ink-300">
                 Over {clip.transitionDuration.toFixed(1)}s

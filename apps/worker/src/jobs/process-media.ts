@@ -7,6 +7,7 @@ import { db, eq, mediaItems } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, downloadToFile, uploadFile } from "../storage";
 import { generateProxy, generateThumbnail, probe } from "../ffmpeg";
+import { analyzeBeats } from "../beats";
 import { notifyMediaUpdated } from "../notify";
 
 export interface ProcessMediaJob {
@@ -48,6 +49,11 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
 
     let thumbnailKey: string | null = null;
     let proxyKey: string | null = null;
+
+    // An uploaded track is as likely to end up the music bed as a YouTube
+    // link, so it gets the same beat analysis. Best-effort: a file we can't
+    // read a tempo off is simply a film the auto-cut won't cut to the music.
+    const beats = isAudio ? await analyzeBeats(localOriginal) : null;
 
     // Audio has no frames to show; the UI renders an icon instead.
     if (!isAudio) {
@@ -94,6 +100,10 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         durationSeconds: info?.durationSeconds ?? null,
         capturedAt,
         checksumSha1,
+        bpm: beats?.bpm ?? null,
+        beatOffsetSeconds: beats?.beatOffsetSeconds ?? null,
+        beatTimes: beats?.beatTimes ?? null,
+        beatConfidence: beats?.confidence ?? null,
         error: null,
       })
       .where(eq(mediaItems.id, item.id));

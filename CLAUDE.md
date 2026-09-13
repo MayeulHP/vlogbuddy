@@ -29,7 +29,11 @@ pnpm build        # production build
 interactively. Don't rely on it; `pnpm typecheck` is the check that works.
 
 Full stack in Docker: `docker compose up -d --build`. Migrations run automatically on
-web boot. `./scripts/setup-env.sh` writes `.env` with generated secrets
+web boot. The images are built for slow machines: a BuildKit cache mount holds the pnpm
+store, `pnpm fetch` keeps the download layer keyed on the lockfile alone, the runtime
+stages install `--prod` only, and neither app copies the other's source — so a web-only
+change rebuilds the worker in seconds. `tsx` is a runtime dependency, not a dev one,
+because the production server and the migrator both run through it. `./scripts/setup-env.sh` writes `.env` with generated secrets
 (`--lan` detects the LAN IP and sets `CORS_ALLOW_ORIGIN=*` for domain-less access).
 
 ### Database changes
@@ -37,13 +41,19 @@ web boot. `./scripts/setup-env.sh` writes `.env` with generated secrets
 Edit `packages/db/src/schema.ts`, then either `pnpm db:generate` (drizzle-kit writes a
 migration) or hand-write the SQL in `packages/db/drizzle/` and append an entry to
 `drizzle/meta/_journal.json`. Migrations are applied by `packages/db/src/migrate.ts`,
-which reads that journal — a `.sql` file without a journal entry never runs.
+which reads that journal — a `.sql` file without a journal entry never runs, and a
+duplicate `when` timestamp makes Drizzle skip the later migration silently, so always
+give a new entry a strictly larger one.
 
 ### Checks
 
 There is no unit test suite. Two integration scripts exist instead:
 
 ```bash
+# The auto-cut: scene detection, and the identity contract syncCut relies on.
+# Pure functions, so this needs nothing running.
+pnpm --filter @vlogbuddy/worker exec tsx src/director-check.ts
+
 # FFmpeg filter graphs, rendering real MP4s. Generate test media first —
 # see the header of apps/worker/src/render-check.ts.
 pnpm --filter @vlogbuddy/worker render-check /tmp/vbrender
@@ -64,12 +74,28 @@ raw TypeScript source — no build step, so a change there is live in both apps.
 
 ### The timeline document is the product
 
-`packages/shared/src/timeline.ts` holds `TimelineDoc`: one flat video track, one music
-bed, titles as per-clip overlays. It is mutated only through `TimelineOp` values fed to
-the pure reducer `applyTimelineOp`, which runs in three places — optimistically in the
-browser, authoritatively in the socket handler, and again in server actions. The worker
-compiles the result into an FFmpeg filter graph. Any new editing capability means a new
-op in the discriminated union plus a reducer case, not an ad-hoc mutation.
+`packages/shared/src/timeline.ts` holds `TimelineDoc`, which has three parts:
+
+- `clips` — the base video track, a sequence. The cut engine owns it: the vote decides
+  what's in it and in what order.
+- `layers` — photos and video composited *over* the base track, each pinned to an
+  absolute time and a rectangle in the frame (fractions, never pixels, so a layout made
+  against the preview survives a change of render height). Hand-placed; the vote has no
+  opinion about them.
+- `audio` — a stack of tracks mixed underneath. Exactly one carries `role: "bed"` and
+  follows the soundtrack lane; the rest are hand-placed cues. Never index `audio[0]` to
+  find the bed — look it up by role.
+
+The base track sets the running time; layers and audio are clipped to it. It is mutated
+only through `TimelineOp` values fed to the pure reducer `applyTimelineOp`, which runs in
+three places — optimistically in the browser, authoritatively in the socket handler, and
+again in server actions. The worker compiles the result into an FFmpeg filter graph. Any
+new editing capability means a new op in the discriminated union plus a reducer case, not
+an ad-hoc mutation.
+
+Documents written before multi-track have no `layers` and no ids on their audio tracks,
+so **every read of `timelines.doc` goes through `normalizeTimeline`** — the column is
+typed but not validated, and the schema's defaults are what fill the gap.
 
 ### The cut engine keeps Gather and Edit in sync
 
@@ -80,11 +106,48 @@ and reconciles `timelines.doc` with `reconcileClips` — reusing existing clips 
 `mediaItemId` so trims, titles and transitions survive. It returns the document unchanged
 when nothing moved, so a flurry of votes doesn't churn revisions.
 
+### The auto-cut decides how the cut plays
+
+`syncCut` settles *what* is in the film; `packages/shared/src/director.ts`
+(`runDirector`) settles *how* it plays. It runs inside `syncCut`, between
+`reconcileClips` and the running-time measurement — the music bed's start is a
+fraction of the total, so it has to see the lengths the director chose.
+
+Screen time is a budget from the item's `rankScore`, banded into three absolute
+tiers against the vlog's `scoreThreshold` — deliberately **not** a percentile of
+the pile, because a percentile is set-relative and one new reaction would re-time
+every other shot. Long videos get a window taken out of their middle rather than
+their whole length. Scenes come from `capturedAt` gaps; the grammar is a hard cut
+within a scene and a dissolve between them.
+
+Two invariants:
+
+- **It is pure.** No `Date.now()`, no `Math.random()`, no I/O, and every
+  generated number rounded to 3dp at the point of generation. `syncCut` skips
+  its write when `next === current`, so the director must return the identical
+  clip object — and the identical document — when nothing moved. A float that
+  fails to round-trip through jsonb would churn a revision on every vote forever.
+- **It never overrules a person.** Each clip carries `auto`, the list of
+  decisions the director still owns (`AUTO_FIELDS`). `applyTimelineOp` clears the
+  matching flag through `clearAutoFor` whenever an edit touches those fields, so
+  all three reducer sites agree without coordination. Documents written before
+  the auto-cut parse with `auto: []`, which means the director leaves them
+  entirely alone. `AUTO_FIELD_FOR` is a total map over the clip's fields, so
+  adding one fails the typecheck until it's classified.
+
+`director.recut` re-arms every flag — that's the "start again" button, and the
+only way the director gets a hand-trimmed shot back.
+
 Every mutation that can change the cut calls it: voting, dragging the cut line,
 pinning/dropping an item, reordering, adding/deleting media or music, finishing an
 Immich import, and `startRenderAction`. The inclusion rule (`lib/is-in-cut.ts`) is shared verbatim with the
 client so the pile, the cut strip and the render can't disagree. Adding a new mutation
 that touches media, music, votes or ordering means calling `syncCut` from it.
+
+It only reconciles the base track and the bed. Layers and hand-placed cues survive every
+sync untouched — except that `pruneTimelineReferences` drops anything pointing at media
+or music that has since been deleted, because a layer over a vanished photo can't
+render.
 
 ### Phases are mostly gone
 
@@ -117,6 +180,22 @@ everything into an album. Dedupe in both directions keys off
 Never let a decrypted key into a server action's return value; `publicConnection`
 is the only shape the browser gets. Thumbnails go through
 `/api/immich/[slug]/thumb/[assetId]`, which uses the *caller's own* credentials.
+
+### The admin boundary
+
+`/admin` is Basic Auth in `src/middleware.ts`; every admin page and action also
+calls `requireAdmin()` from `lib/admin.ts`, and that second check is the one that
+protects the data — server actions are plain POSTs and a matcher change shouldn't
+be all that stands between a guest and `deleteVlogAction`. `createVlogAction` is
+admin-only too. Anything guest-facing (`/v/[slug]` and its actions) stays open.
+
+Export format lives in the one-row `app_settings` table, read through
+`getRenderSettings()` in `packages/db` by both the admin page and the render job;
+`RENDER_HEIGHT`/`RENDER_FPS` only seed the first boot. The read tolerates the
+table being absent, because the worker boots independently of the migration.
+
+Sweeping sources sets `media_items.pruned_at` and drops the objects. The row and
+its votes stay; `queries.ts` must never presign a pruned item.
 
 ### Realtime
 
@@ -159,3 +238,17 @@ dropped, which both `lib/queue.ts` and the worker's boot do defensively.
 - User-facing copy is plain, warm and specific ("The pile is empty", "give it a moment and
   try again"). No jargon from the data model leaks into it.
 - `revalidatePath('/v/${slug}')` after any mutation; add `"layout"` when the phase changes.
+
+Transitions are a curated subset of FFmpeg's `xfade` (eleven, with editors'
+names rather than the filter's). `XFADE_FOR` in `constants.ts` is the single
+place a filter name appears — every other caller asks `overlapsPrevious()`,
+because what the timing code needs to know is whether a clip overlaps the one
+before it, not how it looks. Adding a transition is one entry in three maps.
+
+## FFmpeg gotchas worth not rediscovering
+
+`concat` returns its output at timebase 1/1000000 regardless of what went in,
+and `xfade` refuses two inputs whose timebases disagree. A run of hard cuts
+followed by a dissolve — the auto-cut's ordinary grammar — therefore fails
+outright unless the clip chains and the concat output both `settb=1/${fps}`.
+The `cut-then-dissolve` case in `render-check.ts` exists to keep that fixed.

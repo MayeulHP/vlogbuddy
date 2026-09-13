@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   db,
   eq,
+  getRenderSettings,
   mediaItems,
   musicItems,
   renderJobs,
@@ -11,9 +12,14 @@ import {
   type MediaItem,
 } from "@vlogbuddy/db";
 import {
+  XFADE_FOR,
+  audioTrackSpan,
   clipDuration,
+  overlapsPrevious,
+  layerWindow,
+  layersInPaintOrder,
+  normalizeTimeline,
   timelineDuration,
-  type Clip,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
 import { env } from "../env";
@@ -32,7 +38,9 @@ export interface RenderJobPayload {
  * Every clip is normalised to the same resolution/fps/SAR first — mixing phone
  * portrait video with DSLR landscape stills otherwise makes concat and xfade
  * fall over. Photos become timed video segments; videos get trimmed. Then it's
- * either a straight concat (all cuts) or a chain of xfades (any crossfade).
+ * either a straight concat (all cuts) or a chain of xfades (anything else).
+ * Layers are composited over the result, and every audio track is mixed under
+ * it.
  */
 export async function renderVlog(job: RenderJobPayload): Promise<void> {
   const { renderJobId } = job;
@@ -43,8 +51,14 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
     return;
   }
 
-  const timeline = render.timelineSnapshot;
-  if (!timeline || timeline.clips.length === 0) {
+  if (!render.timelineSnapshot) {
+    await fail(renderJobId, render.vlogId, "There's nothing on the timeline");
+    return;
+  }
+
+  // Snapshots taken before multi-track have no layers and no track ids.
+  const timeline = normalizeTimeline(render.timelineSnapshot);
+  if (timeline.clips.length === 0) {
     await fail(renderJobId, render.vlogId, "There's nothing on the timeline");
     return;
   }
@@ -64,13 +78,22 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
   const workDir = await mkdtemp(path.join(env().TMP_DIR ?? tmpdir(), "render-"));
 
   try {
-    const height = env().RENDER_HEIGHT;
-    const fps = env().RENDER_FPS;
+    // Owned by the admin page, not the environment, so the operator can dial
+    // the format down after watching one render crawl on a small machine.
+    const settings = await getRenderSettings();
+    const height = settings.renderHeight;
+    const fps = settings.renderFps;
     // Even dimensions are required by H.264; 16:9 at the configured height.
     const width = Math.round((height * 16) / 9 / 2) * 2;
 
     // --- Fetch every source the timeline references -----------------------
-    const mediaIds = Array.from(new Set(timeline.clips.map((c) => c.mediaItemId)));
+    // Layers pull in media the base track may not use at all.
+    const mediaIds = Array.from(
+      new Set([
+        ...timeline.clips.map((c) => c.mediaItemId),
+        ...timeline.layers.map((l) => l.mediaItemId),
+      ]),
+    );
     const mediaRows = await db.select().from(mediaItems).where(eq(mediaItems.vlogId, render.vlogId));
     const mediaById = new Map<string, MediaItem>(mediaRows.map((m) => [m.id, m]));
 
@@ -100,30 +123,37 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
       await progress(renderJobId, render.vlogId, pct, "Fetching your clips…");
     }
 
-    // --- Audio bed --------------------------------------------------------
-    let audioPath: string | null = null;
-    const audioTrack = timeline.audio[0] ?? null;
+    // --- Audio stack ------------------------------------------------------
+    // One file per track, keyed by track id. A track whose source can't be
+    // muxed (a streaming link with no extracted audio) simply drops out —
+    // rendering silent beats failing the whole job.
+    const audioPaths = new Map<string, string>();
+    const musicRows = timeline.audio.some((t) => t.musicItemId)
+      ? await db.select().from(musicItems).where(eq(musicItems.vlogId, render.vlogId))
+      : [];
+    const musicById = new Map(musicRows.map((m) => [m.id, m]));
 
-    if (audioTrack) {
-      if (audioTrack.mediaItemId) {
-        const item = mediaById.get(audioTrack.mediaItemId);
-        if (item) {
-          audioPath = path.join(workDir, `music${path.extname(item.originalFilename) || ".mp3"}`);
-          await downloadToFile(item.storageKey, audioPath);
-        }
-      } else if (audioTrack.musicItemId) {
-        const [music] = await db
-          .select()
-          .from(musicItems)
-          .where(eq(musicItems.id, audioTrack.musicItemId))
-          .limit(1);
+    for (const [index, track] of timeline.audio.entries()) {
+      if (track.muted) continue;
 
+      if (track.mediaItemId) {
+        const item = mediaById.get(track.mediaItemId);
+        if (!item) continue;
+        const local = path.join(
+          workDir,
+          `audio-${index}${path.extname(item.originalFilename) || ".mp3"}`,
+        );
+        await downloadToFile(item.storageKey, local);
+        audioPaths.set(track.id, local);
+      } else if (track.musicItemId) {
+        const music = musicById.get(track.musicItemId);
         if (music?.extractedAudioKey) {
-          audioPath = path.join(workDir, "music.m4a");
-          await downloadToFile(music.extractedAudioKey, audioPath);
+          const local = path.join(workDir, `audio-${index}.m4a`);
+          await downloadToFile(music.extractedAudioKey, local);
+          audioPaths.set(track.id, local);
         } else {
           // Streaming links can't be muxed — render silent rather than fail.
-          console.warn(`[render] no audio file for music item ${audioTrack.musicItemId}`);
+          console.warn(`[render] no audio file for music item ${track.musicItemId}`);
         }
       }
     }
@@ -142,7 +172,7 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
       mediaById,
       localPaths,
       hasAudio,
-      audioPath,
+      audioPaths,
       width,
       height,
       fps,
@@ -157,8 +187,8 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
       "-map", outputLabel,
       ...(audioLabel ? ["-map", audioLabel] : []),
       "-c:v", "libx264",
-      "-preset", "medium",
-      "-crf", "20",
+      "-preset", settings.renderPreset,
+      "-crf", String(settings.renderCrf),
       "-pix_fmt", "yuv420p",
       "-r", String(fps),
       ...(audioLabel ? ["-c:a", "aac", "-b:a", "192k"] : ["-an"]),
@@ -220,7 +250,8 @@ export interface GraphOptions {
   localPaths: Map<string, string>;
   /** Whether each source actually carries an audio stream. */
   hasAudio?: Map<string, boolean>;
-  audioPath: string | null;
+  /** Downloaded file per audio track, keyed by `AudioTrack.id`. */
+  audioPaths: Map<string, string>;
   width: number;
   height: number;
   fps: number;
@@ -230,6 +261,13 @@ export interface GraphOptions {
   fontFile?: string | null;
 }
 
+const AUDIO_FORMAT = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo";
+
+/** H.264 needs even dimensions, and so does every scale target we hand it. */
+function evenPx(value: number): number {
+  return Math.max(2, Math.round(value / 2) * 2);
+}
+
 /** Exported for testing — this graph is the trickiest part of the pipeline. */
 export function buildFilterGraph(opts: GraphOptions) {
   const {
@@ -237,7 +275,7 @@ export function buildFilterGraph(opts: GraphOptions) {
     mediaById,
     localPaths,
     hasAudio,
-    audioPath,
+    audioPaths,
     width,
     height,
     fps,
@@ -252,6 +290,11 @@ export function buildFilterGraph(opts: GraphOptions) {
   const clipDurations: number[] = [];
 
   let inputIndex = 0;
+
+  // Ducking is about whether anything is actually going to play under the
+  // shots, so it has to be settled before the clip chains are built.
+  const musicTracks = timeline.audio.filter((t) => !t.muted && audioPaths.has(t.id));
+  const duck = timeline.duckClipAudio && musicTracks.length > 0;
 
   timeline.clips.forEach((clip, i) => {
     const media = mediaById.get(clip.mediaItemId);
@@ -282,6 +325,11 @@ export function buildFilterGraph(opts: GraphOptions) {
         `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`,
         `setsar=1`,
         `fps=${fps}`,
+        // Pin the timebase explicitly. `concat` hands its output back at
+        // 1/1000000 whatever went in, and `xfade` refuses two inputs whose
+        // timebases disagree — which is exactly what a cut followed by a
+        // dissolve produces. See the settb after the concat below.
+        `settb=1/${fps}`,
         `format=yuv420p`,
       ].join(",");
 
@@ -324,9 +372,9 @@ export function buildFilterGraph(opts: GraphOptions) {
         `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration},asetpts=PTS-STARTPTS[${aLabel}]`,
       );
     } else {
-      const volume = timeline.duckClipAudio && audioPath ? clip.volume * 0.35 : clip.volume;
+      const volume = duck ? clip.volume * 0.35 : clip.volume;
       filters.push(
-        `[${idx}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
+        `[${idx}:a]${AUDIO_FORMAT},` +
           `atrim=duration=${duration},asetpts=PTS-STARTPTS,volume=${volume.toFixed(2)}[${aLabel}]`,
       );
     }
@@ -335,12 +383,14 @@ export function buildFilterGraph(opts: GraphOptions) {
 
   if (videoLabels.length === 0) throw new Error("No usable clips in the timeline");
 
-  const usesCrossfade = timeline.clips.some((c, i) => i > 0 && c.transitionIn === "crossfade");
+  const usesTransition = timeline.clips.some((c, i) => i > 0 && overlapsPrevious(c.transitionIn));
 
   let finalVideo: string;
   let finalAudio: string;
+  /** Length of the finished picture, transition overlaps already subtracted. */
+  let videoLength: number;
 
-  if (usesCrossfade && videoLabels.length > 1) {
+  if (usesTransition && videoLabels.length > 1) {
     // Chain xfades; each one pulls the next clip back by its own duration.
     let currentV = videoLabels[0];
     let currentA = audioLabels[0];
@@ -348,7 +398,10 @@ export function buildFilterGraph(opts: GraphOptions) {
 
     for (let i = 1; i < videoLabels.length; i++) {
       const clip = timeline.clips[i];
-      const isFade = clip.transitionIn === "crossfade";
+      // The one place a transition name reaches FFmpeg. Everything else in the
+      // codebase asks `overlapsPrevious` and never needs to know the spelling.
+      const xfadeName = XFADE_FOR[clip.transitionIn];
+      const isFade = xfadeName !== null;
       const fadeDuration = isFade ? Math.min(clip.transitionDuration, clipDurations[i] * 0.9) : 0;
 
       const outV = `xv${i}`;
@@ -357,14 +410,16 @@ export function buildFilterGraph(opts: GraphOptions) {
       if (isFade && fadeDuration > 0) {
         const transitionStart = Math.max(0, offset - fadeDuration);
         filters.push(
-          `[${currentV}][${videoLabels[i]}]xfade=transition=fade:duration=${fadeDuration}:offset=${transitionStart.toFixed(3)}[${outV}]`,
+          `[${currentV}][${videoLabels[i]}]xfade=transition=${xfadeName}:duration=${fadeDuration}:offset=${transitionStart.toFixed(3)}[${outV}]`,
         );
         filters.push(
           `[${currentA}][${audioLabels[i]}]acrossfade=d=${fadeDuration}:c1=tri:c2=tri[${outA}]`,
         );
         offset = offset - fadeDuration + clipDurations[i];
       } else {
-        filters.push(`[${currentV}][${videoLabels[i]}]concat=n=2:v=1:a=0[${outV}]`);
+        // Back to the clip timebase, so the next xfade in the chain — if this
+        // run of hard cuts ends at a scene break — can accept this as an input.
+        filters.push(`[${currentV}][${videoLabels[i]}]concat=n=2:v=1:a=0,settb=1/${fps}[${outV}]`);
         filters.push(`[${currentA}][${audioLabels[i]}]concat=n=2:v=0:a=1[${outA}]`);
         offset += clipDurations[i];
       }
@@ -375,6 +430,7 @@ export function buildFilterGraph(opts: GraphOptions) {
 
     finalVideo = currentV;
     finalAudio = currentA;
+    videoLength = offset;
   } else {
     const vIn = videoLabels.map((l) => `[${l}]`).join("");
     const aIn = audioLabels.map((l) => `[${l}]`).join("");
@@ -382,30 +438,131 @@ export function buildFilterGraph(opts: GraphOptions) {
     filters.push(`${aIn}concat=n=${audioLabels.length}:v=0:a=1[outa]`);
     finalVideo = "outv";
     finalAudio = "outa";
+    videoLength = clipDurations.reduce((a, b) => a + b, 0);
   }
 
-  // --- Music bed --------------------------------------------------------
-  let audioLabel: string | null = `[${finalAudio}]`;
+  // --- Picture layers ---------------------------------------------------
+  // Composited bottom-up, each one shifted onto its slot in the finished
+  // picture with setpts so overlay can line it up by timestamp. `repeatlast=0`
+  // is what stops a layer freezing on screen once its own input runs out.
+  const layerAudioLabels: string[] = [];
 
-  if (audioPath) {
-    const musicIdx = inputIndex++;
-    const track = timeline.audio[0];
-    inputs.push("-i", audioPath);
+  layersInPaintOrder(timeline).forEach((layer, n) => {
+    const media = mediaById.get(layer.mediaItemId);
+    const local = localPaths.get(layer.mediaItemId);
+    if (!media || !local) return;
 
-    const totalLength = clipDurations.reduce((a, b) => a + b, 0);
-    const fadeOutStart = Math.max(0, totalLength - (track?.fadeOut ?? 2));
+    const window = layerWindow(layer, videoLength);
+    if (window.duration <= 0.05) return;
 
+    const idx = inputIndex++;
+    if (layer.kind === "photo") {
+      inputs.push("-loop", "1", "-t", String(window.duration), "-i", local);
+    } else {
+      inputs.push("-ss", String(layer.trimStart), "-t", String(window.duration), "-i", local);
+    }
+
+    const boxWidth = evenPx(layer.width * width);
+    const x = Math.round(layer.x * width);
+    const y = Math.round(layer.y * height);
+
+    const fadeIn = Math.min(layer.fadeIn, window.duration / 2);
+    const fadeOut = Math.min(layer.fadeOut, window.duration / 2);
+
+    const chain = [
+      // -2 keeps the source aspect while staying even-numbered for H.264.
+      `scale=${boxWidth}:-2`,
+      `setsar=1`,
+      `fps=${fps}`,
+      // Alpha is what makes fades and opacity possible at all.
+      `format=yuva420p`,
+      ...(fadeIn > 0.01 ? [`fade=t=in:st=0:d=${fadeIn.toFixed(2)}:alpha=1`] : []),
+      ...(fadeOut > 0.01
+        ? [`fade=t=out:st=${(window.duration - fadeOut).toFixed(2)}:d=${fadeOut.toFixed(2)}:alpha=1`]
+        : []),
+      ...(layer.opacity < 0.999 ? [`colorchannelmixer=aa=${layer.opacity.toFixed(3)}`] : []),
+      `setpts=PTS-STARTPTS+${window.start.toFixed(3)}/TB`,
+    ].join(",");
+
+    const lLabel = `lv${n}`;
+    filters.push(`[${idx}:v]${chain}[${lLabel}]`);
+
+    const outLabel = `ov${n}`;
     filters.push(
-      `[${musicIdx}:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,` +
-        `atrim=start=${track?.offset ?? 0},asetpts=PTS-STARTPTS,` +
-        // Loop short tracks so the bed covers the whole video.
-        `apad,atrim=duration=${totalLength},` +
-        `volume=${(track?.volume ?? 0.8).toFixed(2)},` +
-        `afade=t=in:st=0:d=${track?.fadeIn ?? 1},` +
-        `afade=t=out:st=${fadeOutStart.toFixed(2)}:d=${track?.fadeOut ?? 2}[music]`,
+      `[${finalVideo}][${lLabel}]overlay=x=${x}:y=${y}:eof_action=pass:repeatlast=0:format=auto[${outLabel}]`,
     );
+    finalVideo = outLabel;
 
-    filters.push(`[${finalAudio}][music]amix=inputs=2:duration=first:dropout_transition=0[mixa]`);
+    if (layer.kind === "video" && !layer.muted && clipHasAudio(media, hasAudio)) {
+      const aLabel = `la${n}`;
+      const delayMs = Math.round(window.start * 1000);
+      filters.push(
+        `[${idx}:a]${AUDIO_FORMAT},` +
+          `atrim=duration=${window.duration},asetpts=PTS-STARTPTS,` +
+          `volume=${layer.volume.toFixed(2)}` +
+          (delayMs > 0 ? `,adelay=${delayMs}:all=1` : "") +
+          `[${aLabel}]`,
+      );
+      layerAudioLabels.push(aLabel);
+    }
+  });
+
+  // --- The audio stack --------------------------------------------------
+  const musicLabels: string[] = [];
+
+  musicTracks.forEach((track, n) => {
+    const file = audioPaths.get(track.id);
+    if (!file) return;
+
+    const span = audioTrackSpan(track, videoLength);
+    if (span <= 0.05) return;
+
+    // `-stream_loop` is the only honest way to repeat a short track; `apad`
+    // (what this used to do) pads with silence, which is not the same thing.
+    if (track.loop) inputs.push("-stream_loop", "-1");
+    inputs.push("-i", file);
+    const idx = inputIndex++;
+
+    const fadeIn = Math.min(track.fadeIn, span / 2);
+    const fadeOut = Math.min(track.fadeOut, span / 2);
+    const delayMs = Math.round(track.startAt * 1000);
+
+    const chain = [
+      AUDIO_FORMAT,
+      ...(track.offset > 0 ? [`atrim=start=${track.offset}`] : []),
+      `asetpts=PTS-STARTPTS`,
+      // A short track that isn't looping stops early; pad so the fade-out
+      // still lands where the timeline says it does.
+      `apad`,
+      `atrim=duration=${span.toFixed(3)}`,
+      `volume=${track.volume.toFixed(2)}`,
+      ...(fadeIn > 0.01 ? [`afade=t=in:st=0:d=${fadeIn.toFixed(2)}`] : []),
+      ...(fadeOut > 0.01
+        ? [`afade=t=out:st=${(span - fadeOut).toFixed(2)}:d=${fadeOut.toFixed(2)}`]
+        : []),
+      ...(delayMs > 0 ? [`adelay=${delayMs}:all=1`] : []),
+    ].join(",");
+
+    const label = `mus${n}`;
+    filters.push(`[${idx}:a]${chain}[${label}]`);
+    musicLabels.push(label);
+  });
+
+  const mixInputs = [finalAudio, ...musicLabels, ...layerAudioLabels];
+  let audioLabel: string;
+
+  if (mixInputs.length === 1) {
+    audioLabel = `[${finalAudio}]`;
+  } else {
+    // `normalize=0`: every level on the timeline was dialled in by hand, and
+    // amix's default would quietly divide them all by the number of tracks —
+    // adding a second track would duck the first. The limiter is the price of
+    // that: it catches the summed peaks instead of letting them clip.
+    filters.push(
+      `${mixInputs.map((l) => `[${l}]`).join("")}` +
+        `amix=inputs=${mixInputs.length}:duration=first:dropout_transition=0:normalize=0,` +
+        `alimiter=limit=0.95:level=disabled[mixa]`,
+    );
     audioLabel = "[mixa]";
   }
 

@@ -18,6 +18,11 @@ type WorkerEvent =
   | { type: "render:progress"; vlogId: string; payload: RenderProgressPayload }
   | { type: "immich:transfer"; vlogId: string; payload: ImmichTransferPayload }
   /**
+   * Reuses the "a track appeared" event: the browser only has to re-read the
+   * row to pick up the freshly extracted audio and its presigned URL.
+   */
+  | { type: "music:added"; vlogId: string; payload: { musicItemId: string } }
+  /**
    * Not a browser event: the web process intercepts this one and re-runs the
    * cut engine. The worker can't do it itself — the engine lives in the web
    * app — and media that appeared without it would never join the cut.
@@ -48,6 +53,11 @@ export async function notifyImmichTransfer(
   payload: ImmichTransferPayload,
 ): Promise<void> {
   await publish({ type: "immich:transfer", vlogId, payload });
+}
+
+/** Nudges every open browser to re-read a track whose audio just changed. */
+export async function notifyMusicUpdated(vlogId: string, musicItemId: string): Promise<void> {
+  await publish({ type: "music:added", vlogId, payload: { musicItemId } });
 }
 
 /** Asks the web process to rebuild the cut after media appeared out of band. */

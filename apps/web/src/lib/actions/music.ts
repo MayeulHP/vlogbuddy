@@ -81,6 +81,9 @@ export async function addMusicAction(
     const endpoint = oembedEndpoint(link);
     const meta = endpoint ? await fetchOembed(endpoint) : null;
 
+    // Only YouTube audio can be extracted, and only when explicitly enabled.
+    const willExtract = env().ENABLE_YT_AUDIO && canExtractAudio(link.source);
+
     const [item] = await db
       .insert(musicItems)
       .values({
@@ -94,10 +97,29 @@ export async function addMusicAction(
         artist: meta?.artist ?? null,
         thumbnailUrl: meta?.thumbnailUrl ?? null,
         timelinePosition: parsed.data.timelinePosition,
-        // Only YouTube audio can be extracted, and only when explicitly enabled.
-        status: env().ENABLE_YT_AUDIO && canExtractAudio(link.source) ? "pending" : "ready",
+        status: willExtract ? "pending" : "ready",
       })
       .returning();
+
+    /**
+     * A track parked at "pending" with nothing queued behind it never gets a
+     * file, so the bed is silent in the preview and dry in the render. Queue
+     * the fetch here rather than waiting for someone to ask for it.
+     */
+    if (willExtract) {
+      try {
+        await enqueueExtractAudio({ musicItemId: item.id, vlogId: session.vlog.id });
+      } catch (err) {
+        console.error("[music] could not queue audio extraction:", err);
+        await db
+          .update(musicItems)
+          .set({
+            status: "failed",
+            error: "Couldn't start fetching the sound — try again in a moment",
+          })
+          .where(eq(musicItems.id, item.id));
+      }
+    }
 
     // The first track added becomes the music bed on its own.
     await syncCut(session.vlog.id, session.member.id);

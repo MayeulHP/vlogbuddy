@@ -17,7 +17,14 @@ import {
   type Vlog,
 } from "@vlogbuddy/db";
 import { desc } from "drizzle-orm";
-import { DEFAULT_REACTIONS, emptyTimeline, rankScore, type ReactionTier, type TimelineDoc } from "@vlogbuddy/shared";
+import {
+  DEFAULT_REACTIONS,
+  emptyTimeline,
+  normalizeTimeline,
+  rankScore,
+  type ReactionTier,
+  type TimelineDoc,
+} from "@vlogbuddy/shared";
 import { presignDownload } from "./storage";
 
 export interface ReactionTotals {
@@ -120,10 +127,15 @@ export async function getMediaItems(
   return Promise.all(
     rows.map(async ({ item, uploaderName }) => {
       const key = `media:${item.id}`;
+      // A swept item keeps its row and its votes, but the bytes are gone —
+      // presigning them would hand out links to 404s.
+      const swept = item.prunedAt !== null;
       const [thumbnailUrl, proxyUrl, originalUrl] = await Promise.all([
-        item.thumbnailKey ? presignDownload(item.thumbnailKey) : Promise.resolve(null),
-        item.proxyKey ? presignDownload(item.proxyKey) : Promise.resolve(null),
-        item.status === "ready" ? presignDownload(item.storageKey) : Promise.resolve(null),
+        item.thumbnailKey && !swept ? presignDownload(item.thumbnailKey) : Promise.resolve(null),
+        item.proxyKey && !swept ? presignDownload(item.proxyKey) : Promise.resolve(null),
+        item.status === "ready" && !swept
+          ? presignDownload(item.storageKey)
+          : Promise.resolve(null),
       ]);
       return {
         ...item,
@@ -181,7 +193,7 @@ export async function getVlogMembers(vlogId: string) {
 export async function getTimeline(vlogId: string): Promise<{ doc: TimelineDoc; revision: number }> {
   const [row] = await db.select().from(timelines).where(eq(timelines.vlogId, vlogId)).limit(1);
   if (!row) return { doc: emptyTimeline(), revision: 0 };
-  return { doc: row.doc, revision: row.revision };
+  return { doc: normalizeTimeline(row.doc), revision: row.revision };
 }
 
 export async function getLatestRenderJob(vlogId: string) {

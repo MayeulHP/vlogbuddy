@@ -5,6 +5,7 @@ import {
   applyTimelineOp,
   formatDuration,
   timelineDuration,
+  type AudioTrack,
   type TimelineDoc,
   type TimelineOp,
 } from "@vlogbuddy/shared";
@@ -13,10 +14,14 @@ import { startRenderAction } from "@/lib/actions/timeline";
 import { setMusicBedAction } from "@/lib/actions/cut";
 import { useSocketEvent, type VlogSocket } from "@/hooks/use-vlog-socket";
 import { ClipInspector } from "./clip-inspector";
-import { TimelineStrip } from "./timeline-strip";
+import { LayerInspector } from "./layer-inspector";
+import { AudioInspector, type SoundState } from "./audio-inspector";
+import { LayerPanel, SoundPanel } from "./stack-panels";
+import { DirectorPanel } from "./director-panel";
+import { TimelineTracks, audioTrackLabel } from "./timeline-tracks";
 import { PreviewPlayer } from "./preview-player";
+import { NO_SELECTION, type Selection } from "./selection";
 import { SectionHead } from "../brand";
-import { cn } from "@/lib/cn";
 
 interface EditorViewProps {
   slug: string;
@@ -33,15 +38,19 @@ interface EditorViewProps {
 }
 
 /**
- * The v1 editor: reorder, trim, title, pick the music bed. Deliberately small —
- * the vlog is always already assembled from the vote (the cut engine keeps it
- * that way), so this is about tightening it up rather than building from
- * scratch. You can hop back to Gather at any time; both views edit the same
- * live document.
+ * The editor: reorder, trim, title, layer and score. Deliberately small — the
+ * vlog is always already assembled from the vote (the cut engine keeps it that
+ * way), so this is about tightening it up rather than building from scratch.
+ * You can hop back to Gather at any time; both views edit the same live
+ * document.
+ *
+ * The base track belongs to the crew. Layers and extra sound are yours: they
+ * hang off the clock rather than off a shot, which is why the bench is a stack
+ * of lanes on one shared ruler.
  *
  * Edits are sent as ops over the socket. The server applies them to the
  * authoritative doc and rebroadcasts; we apply optimistically so it feels
- * instant. Multi-track and true CRDT merging are v2 (see TODO.md).
+ * instant. True CRDT merging is still v2 (see TODO.md).
  */
 export function EditorView({
   slug,
@@ -57,18 +66,25 @@ export function EditorView({
 }: EditorViewProps) {
   const [timeline, setTimeline] = useState<TimelineDoc>(initialTimeline);
   const [revision, setRevision] = useState(initialRevision);
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(
-    initialTimeline.clips[0]?.id ?? null,
+  const [selection, setSelection] = useState<Selection>(
+    initialTimeline.clips[0] ? { kind: "clip", id: initialTimeline.clips[0].id } : NO_SELECTION,
   );
   const [playheadTime, setPlayheadTime] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
+  const [, startTransition] = useTransition();
 
   const mediaById = useMemo(() => {
     const map = new Map<string, MediaItemView>();
     for (const item of media) map.set(item.id, item);
     return map;
   }, [media]);
+
+  const musicById = useMemo(() => {
+    const map = new Map<string, MusicItemView>();
+    for (const item of music) map.set(item.id, item);
+    return map;
+  }, [music]);
 
   const durations = useMemo(() => {
     const out: Record<string, number | null> = {};
@@ -135,7 +151,26 @@ export function EditorView({
     [socket, vlogId, revision],
   );
 
-  const selectedClip = timeline.clips.find((c) => c.id === selectedClipId) ?? null;
+  // A layer or track can vanish under you when someone else pulls it, or when
+  // the cut engine prunes a swept source.
+  const selected = useMemo(() => {
+    if (selection.kind === "clip") {
+      return timeline.clips.find((c) => c.id === selection.id) ?? null;
+    }
+    if (selection.kind === "layer") {
+      return timeline.layers.find((l) => l.id === selection.id) ?? null;
+    }
+    if (selection.kind === "audio") {
+      return timeline.audio.find((t) => t.id === selection.id) ?? null;
+    }
+    return null;
+  }, [selection, timeline]);
+
+  function chooseBedMusic(musicItemId: string | null) {
+    startTransition(() => {
+      void setMusicBedAction(slug, musicItemId);
+    });
+  }
 
   async function render() {
     setRendering(true);
@@ -154,7 +189,7 @@ export function EditorView({
         tone="ink"
         eyebrow="Beat 05 · Cut"
         title="The cutting bench"
-        note="Already assembled from the crew's marks — this is where you tighten it. Trim, retime, title, score. Everyone edits the same strip, live."
+        note="Already assembled from the crew's marks — this is where you tighten it. Trim, retime, layer, score. Everyone edits the same strip, live."
         right={
           <div className="flex items-stretch gap-3">
             <button onClick={onBackToGather} className="btn-quiet-dark self-end">
@@ -167,6 +202,7 @@ export function EditorView({
               </p>
               <p className="eyebrow-light mt-1">
                 {timeline.clips.length} shot{timeline.clips.length === 1 ? "" : "s"}
+                {timeline.layers.length > 0 && ` · ${timeline.layers.length} layer${timeline.layers.length === 1 ? "" : "s"}`}
               </p>
             </div>
             {isCreator && (
@@ -193,49 +229,97 @@ export function EditorView({
           <PreviewPlayer
             timeline={timeline}
             mediaById={mediaById}
+            musicById={musicById}
             durations={durations}
             playheadTime={playheadTime}
             onTimeChange={setPlayheadTime}
-            selectedClipId={selectedClipId}
-            onSelectClip={setSelectedClipId}
+            selectedClipId={selection.kind === "clip" ? selection.id : null}
+            onSelectClip={(id) => setSelection({ kind: "clip", id })}
           />
 
-          <TimelineStrip
+          <TimelineTracks
             timeline={timeline}
             mediaById={mediaById}
+            music={music}
             durations={durations}
-            selectedClipId={selectedClipId}
-            onSelectClip={setSelectedClipId}
+            totalDuration={totalDuration}
+            selection={selection}
+            onSelect={setSelection}
             onDispatch={dispatch}
+            playheadTime={playheadTime}
+            onSeek={setPlayheadTime}
             onBackToGather={onBackToGather}
           />
         </div>
 
         <aside className="space-y-4">
-          {selectedClip ? (
+          {selection.kind === "clip" && selected && "titles" in selected ? (
             <ClipInspector
-              clip={selectedClip}
-              media={mediaById.get(selectedClip.mediaItemId) ?? null}
-              index={timeline.clips.findIndex((c) => c.id === selectedClip.id)}
+              clip={selected}
+              media={mediaById.get(selected.mediaItemId) ?? null}
+              index={timeline.clips.findIndex((c) => c.id === selected.id)}
               total={timeline.clips.length}
               onDispatch={dispatch}
             />
+          ) : selection.kind === "layer" && selected && "opacity" in selected ? (
+            <LayerInspector
+              layer={selected}
+              media={mediaById.get(selected.mediaItemId) ?? null}
+              totalDuration={totalDuration}
+              onDispatch={dispatch}
+            />
+          ) : selection.kind === "audio" && selected && "role" in selected ? (
+            <AudioInspector
+              track={selected}
+              label={audioTrackLabel(selected, mediaById, musicById)}
+              totalDuration={totalDuration}
+              sound={soundStateFor(selected, mediaById, musicById)}
+              onDispatch={dispatch}
+              onRemove={() => {
+                dispatch({ type: "audio.remove", trackId: selected.id });
+                if (selected.role === "bed") chooseBedMusic(null);
+                setSelection(NO_SELECTION);
+              }}
+            />
           ) : (
             <div className="border border-[color:var(--hair-dark)] bg-ink-850 p-5 text-center">
-              <p className="eyebrow-light">No shot selected</p>
+              <p className="eyebrow-light">Nothing selected</p>
               <p className="mt-2 text-[13px] leading-relaxed text-ink-300">
-                Pick a shot on the strip to trim it, lay a title over it, or change how it comes
-                in.
+                Pick a shot on the strip to trim it, a layer to move it around the frame, or a
+                track to ride its level.
               </p>
             </div>
           )}
 
-          <MusicBed
+          <DirectorPanel
             slug={slug}
+            timeline={timeline}
+            mediaById={mediaById}
+            locked={rendering}
+          />
+
+          <LayerPanel
+            timeline={timeline}
+            media={media}
+            mediaById={mediaById}
+            playheadTime={playheadTime}
+            selection={selection}
+            onSelect={setSelection}
+            onDispatch={dispatch}
+          />
+
+          <SoundPanel
             timeline={timeline}
             music={music}
             media={media}
+            mediaById={mediaById}
+            musicById={musicById}
+            totalDuration={totalDuration}
+            playheadTime={playheadTime}
+            selection={selection}
+            onSelect={setSelection}
             onDispatch={dispatch}
+            onChooseBedMusic={chooseBedMusic}
           />
         </aside>
       </div>
@@ -244,165 +328,33 @@ export function EditorView({
 }
 
 /**
- * Chooses the audio bed: a voted streaming track, or an uploaded audio file.
- *
- * Streaming tracks go through the cut engine (same choice as the soundtrack
- * lane on the Gather page, so the two can't disagree). Uploaded audio is set
- * directly on the timeline — the cut engine leaves an uploaded bed alone.
+ * What the inspector needs to explain a silent track: whether there is a file
+ * behind it yet, and if not, how far along the fetch is.
  */
-function MusicBed({
-  slug,
-  timeline,
-  music,
-  media,
-  onDispatch,
-}: {
-  slug: string;
-  timeline: TimelineDoc;
-  music: MusicItemView[];
-  media: MediaItemView[];
-  onDispatch: (op: TimelineOp) => void;
-}) {
-  const [, startTransition] = useTransition();
-  const track = timeline.audio[0] ?? null;
-  const audioUploads = media.filter((m) => m.contentType.startsWith("audio/"));
-
-  return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
-      <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
-        <p className="eyebrow-light">Score</p>
-        <h3 className="headline mt-0.5 text-xl text-paper-100">The bed</h3>
-        <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-500">
-          Runs under the whole cut
-        </p>
-      </div>
-
-      <div className="divide-y divide-[color:var(--hair-dark)]">
-        <button
-          onClick={() =>
-            startTransition(() => {
-              onDispatch({ type: "audio.remove", index: 0 });
-              return setMusicBedAction(slug, null).then(() => {});
-            })
-          }
-          className={cn(
-            "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
-            !track
-              ? "bg-signal-900/40 text-paper-100"
-              : "text-ink-400 hover:bg-ink-800 hover:text-paper-200",
-          )}
-        >
-          <span className="eyebrow-light w-10 shrink-0">Dry</span>
-          <span className="min-w-0 flex-1 truncate">No score</span>
-        </button>
-
-        {audioUploads.map((item) => {
-          const active = track?.mediaItemId === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() =>
-                onDispatch({
-                  type: "audio.set",
-                  index: 0,
-                  track: {
-                    musicItemId: null,
-                    mediaItemId: item.id,
-                    offset: 0,
-                    startAt: 0,
-                    volume: 0.8,
-                    fadeIn: 1,
-                    fadeOut: 2,
-                  },
-                })
-              }
-              className={cn(
-                "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
-                active
-                  ? "bg-signal-900/40 text-paper-100"
-                  : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
-              )}
-            >
-              <span className="eyebrow-light w-10 shrink-0">File</span>
-              <span className="min-w-0 flex-1 truncate">{item.originalFilename}</span>
-              <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-leader-400">
-                ready
-              </span>
-            </button>
-          );
-        })}
-
-        {music.map((item) => {
-          const active = track?.musicItemId === item.id;
-          const hasAudio = Boolean(item.extractedAudioKey);
-          return (
-            <button
-              key={item.id}
-              onClick={() => startTransition(() => setMusicBedAction(slug, item.id).then(() => {}))}
-              className={cn(
-                "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
-                active
-                  ? "bg-signal-900/40 text-paper-100"
-                  : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
-              )}
-              title={
-                hasAudio
-                  ? "Audio ready to mux"
-                  : "No audio file for this track — it won't be in the render"
-              }
-            >
-              <span className="eyebrow-light w-10 shrink-0">Link</span>
-              <span className="min-w-0 flex-1 truncate">{item.title ?? item.url}</span>
-              <span
-                className={cn(
-                  "shrink-0 font-mono text-2xs uppercase tracking-label",
-                  hasAudio ? "text-leader-400" : "text-tape-400",
-                )}
-              >
-                {hasAudio ? "ready" : "no audio"}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {track && (
-        <div className="space-y-3 border-t border-[color:var(--hair-dark)] px-4 py-3">
-          <label className="block">
-            <span className="eyebrow-light">Level — {Math.round(track.volume * 100)}%</span>
-            <input
-              type="range"
-              min={0}
-              max={1.5}
-              step={0.05}
-              value={track.volume}
-              onChange={(e) =>
-                onDispatch({
-                  type: "audio.set",
-                  index: 0,
-                  track: { ...track, volume: Number(e.target.value) },
-                })
-              }
-              className="slider slider-dark mt-1.5"
-            />
-          </label>
-
-          <label className="flex items-center gap-2 font-mono text-2xs uppercase tracking-label text-ink-300">
-            <input
-              type="checkbox"
-              checked={timeline.duckClipAudio}
-              onChange={(e) =>
-                onDispatch({
-                  type: "settings.update",
-                  patch: { duckClipAudio: e.target.checked },
-                })
-              }
-              className="check check-dark"
-            />
-            Duck the shots under the score
-          </label>
-        </div>
-      )}
-    </section>
-  );
+function soundStateFor(
+  track: AudioTrack,
+  mediaById: Map<string, MediaItemView>,
+  musicById: Map<string, MusicItemView>,
+): SoundState | undefined {
+  if (track.mediaItemId) {
+    const item = mediaById.get(track.mediaItemId);
+    if (!item) return undefined;
+    return {
+      playable: Boolean(item.originalUrl),
+      status: item.status,
+      error: item.error,
+      fromLink: false,
+    };
+  }
+  if (track.musicItemId) {
+    const item = musicById.get(track.musicItemId);
+    if (!item) return undefined;
+    return {
+      playable: Boolean(item.audioUrl),
+      status: item.status,
+      error: item.error,
+      fromLink: true,
+    };
+  }
+  return undefined;
 }

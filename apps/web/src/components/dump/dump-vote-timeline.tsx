@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { estimatedClipDuration, formatDuration, type ReactionTier } from "@vlogbuddy/shared";
+import {
+  estimatedClipDuration,
+  formatDayShort,
+  formatDuration,
+  type ReactionTier,
+} from "@vlogbuddy/shared";
 import { isInCut } from "@/lib/is-in-cut";
 import type { MediaItemView } from "@/lib/queries";
 import { setCutLineAction } from "@/lib/actions/cut";
@@ -23,10 +28,7 @@ function chronoSort(a: MediaItemView, b: MediaItemView) {
 }
 
 function dayLabel(value: Date | string | null) {
-  if (!value) return "No date";
-  const d = typeof value === "string" ? new Date(value) : value;
-  if (!Number.isFinite(d.getTime())) return "No date";
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  return formatDayShort(value) ?? "No date";
 }
 
 /**
@@ -84,10 +86,16 @@ export function DumpVoteTimeline({
   const expectedSeconds = useMemo(
     () =>
       selected.reduce(
-        (acc, item) => acc + estimatedClipDuration(item.kind, item.durationSeconds),
+        (acc, item) =>
+          acc +
+          estimatedClipDuration(item.kind, item.durationSeconds, {
+            rank: item.reactions.rank,
+            threshold,
+            mediaItemId: item.id,
+          }),
         0,
       ),
-    [selected],
+    [selected, threshold],
   );
 
   function persist(next: number) {

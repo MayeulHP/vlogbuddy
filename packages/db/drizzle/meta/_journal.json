@@ -36,6 +36,20 @@
       "when": 1789560000000,
       "tag": "0004_simplify_vlog_state",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789646400000,
+      "tag": "0005_admin_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789732800000,
+      "tag": "0006_beat_grid",
+      "breakpoints": true
     }
   ]
 }

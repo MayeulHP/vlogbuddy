@@ -2,11 +2,40 @@
  * Integration check for the render filter graph. Builds real graphs and runs
  * FFmpeg against generated test media. Not part of the app — run manually:
  *   pnpm --filter @vlogbuddy/worker exec tsx src/render-check.ts <mediaDir>
+ *
+ * Generate the fixtures into that directory first (any real media of the right
+ * shapes works; these are just deterministic):
+ *
+ *   D=/tmp/vbrender; mkdir -p $D/out; cd $D
+ *   ffmpeg -y -f lavfi -i "testsrc=size=1920x1080:duration=1:rate=1" -frames:v 1 photo1.jpg
+ *   ffmpeg -y -f lavfi -i "smptebars=size=1080x1440:duration=1:rate=1" -frames:v 1 photo2.jpg
+ *   ffmpeg -y -f lavfi -i "testsrc=size=1280x720:duration=6:rate=30" \
+ *          -f lavfi -i "sine=frequency=440:duration=6" \
+ *          -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest video1.mp4
+ *   ffmpeg -y -f lavfi -i "testsrc=size=720x1280:duration=5:rate=30" \
+ *          -f lavfi -i "sine=frequency=320:duration=5" \
+ *          -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest video2_portrait.mp4
+ *   ffmpeg -y -f lavfi -i "testsrc=size=640x480:duration=4:rate=30" \
+ *          -c:v libx264 -pix_fmt yuv420p -an video_silent.mp4
+ *   ffmpeg -y -f lavfi -i "sine=frequency=220:duration=8" -c:a aac music.m4a
+ *
+ * The portrait and silent sources are not incidental: they are the two shapes
+ * that break a filter graph written against the happy path.
  */
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { MediaItem } from "@vlogbuddy/db";
-import { timelineDocSchema, type TimelineDoc } from "@vlogbuddy/shared";
+import {
+  TRANSITIONS,
+  audioTrackSchema,
+  emptyTimeline,
+  layerClipSchema,
+  reconcileClips,
+  runDirector,
+  timelineDocSchema,
+  type CutEntry,
+  type TimelineDoc,
+} from "@vlogbuddy/shared";
 import { buildFilterGraph } from "./jobs/render.js";
 import { probe, supportsDrawText } from "./ffmpeg.js";
 
@@ -48,6 +77,8 @@ function media(id: string, kind: "photo" | "video", file: string, duration: numb
 }
 
 type Clip = TimelineDoc["clips"][number];
+type Layer = TimelineDoc["layers"][number];
+type Track = TimelineDoc["audio"][number];
 
 function clip(over: Partial<Clip> & Pick<Clip, "id" | "mediaItemId">): Clip {
   return {
@@ -60,8 +91,17 @@ function clip(over: Partial<Clip> & Pick<Clip, "id" | "mediaItemId">): Clip {
     volume: 1,
     muted: false,
     titles: [],
+    auto: [],
     ...over,
   };
+}
+
+function layer(over: Partial<Layer> & Pick<Layer, "id" | "mediaItemId">): Layer {
+  return layerClipSchema.parse({ kind: "photo", ...over });
+}
+
+function track(over: Partial<Track> = {}): Track {
+  return audioTrackSchema.parse({ role: "bed", ...over });
 }
 
 /** Extracts a single frame as raw bytes, for comparing two renders. */
@@ -89,6 +129,15 @@ async function frameBytes(video: string, atSecond: number): Promise<Buffer | nul
   }
 }
 
+/** Mean absolute difference between two frames of identical dimensions. */
+function meanByteDelta(a: Buffer, b: Buffer): number {
+  const length = Math.min(a.length, b.length);
+  if (length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < length; i++) sum += Math.abs(a[i] - b[i]);
+  return sum / length;
+}
+
 async function runCase(
   name: string,
   timeline: TimelineDoc,
@@ -97,6 +146,8 @@ async function runCase(
   audioPath: string | null,
   /** When set, assert that title text is actually visible at this timestamp. */
   expectTextAt?: number,
+  /** When set, assert that a layer actually changes the frame at this timestamp. */
+  expectLayerAt?: number,
 ) {
   const mediaById = new Map(mediaList.map((m) => [m.id, m]));
   const localPaths = new Map(Object.entries(files).map(([id, f]) => [id, path.join(DIR, f)]));
@@ -114,6 +165,13 @@ async function runCase(
     hasAudio.set(m.id, info?.hasAudio ?? false);
   }
 
+  // Every track in these fixtures points at the same generated file — what's
+  // under test is the graph, not where the bytes came from.
+  const audioPaths = new Map<string, string>();
+  if (audioPath) {
+    for (const t of timeline.audio) audioPaths.set(t.id, path.join(DIR, audioPath));
+  }
+
   const outFile = path.join(OUT, `${name}.mp4`);
 
   try {
@@ -122,7 +180,7 @@ async function runCase(
       mediaById,
       localPaths,
       hasAudio,
-      audioPath: audioPath ? path.join(DIR, audioPath) : null,
+      audioPaths,
       width: 1280,
       height: 720,
       fps: 30,
@@ -170,57 +228,83 @@ async function runCase(
     const okDims = v?.width === 1280 && v?.height === 720;
     const okAudio = audioLabel ? Boolean(a) : true;
 
-    // A valid MP4 isn't proof the title drew: drawtext can silently render
-    // nothing. Re-render the identical timeline with titles disabled and
-    // compare — matching frames mean the text never appeared.
-    let titleNote = "";
-    let titlesOk = true;
-    if (expectTextAt !== undefined && (await supportsDrawText())) {
-      const bare = path.join(OUT, `${name}.notitle.mp4`);
-      const g2 = buildFilterGraph({
-        timeline, mediaById, localPaths, hasAudio,
-        audioPath: audioPath ? path.join(DIR, audioPath) : null,
+    /**
+     * A valid MP4 isn't proof anything was drawn: drawtext can silently render
+     * nothing, and a layer whose timestamps are wrong is simply never
+     * composited. Re-render the same timeline with the feature removed and
+     * compare a frame — matching bytes mean it never appeared.
+     */
+    async function renderVariant(suffix: string, variant: TimelineDoc, allowTitles: boolean) {
+      const file = path.join(OUT, `${name}.${suffix}.mp4`);
+      const g = buildFilterGraph({
+        timeline: variant, mediaById, localPaths, hasAudio, audioPaths,
         width: 1280, height: 720, fps: 30,
-        allowTitles: false,
+        allowTitles,
         fontFile: process.env.FONT_PATH || null,
       });
       await new Promise<void>((resolve) => {
         const c = spawn("ffmpeg", [
           "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
-          ...g2.args, "-map", g2.outputLabel,
-          ...(g2.audioLabel ? ["-map", g2.audioLabel] : []),
+          ...g.args, "-map", g.outputLabel,
+          ...(g.audioLabel ? ["-map", g.audioLabel] : []),
           "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
           "-pix_fmt", "yuv420p", "-r", "30",
-          ...(g2.audioLabel ? ["-c:a", "aac"] : ["-an"]),
-          bare,
+          ...(g.audioLabel ? ["-c:a", "aac"] : ["-an"]),
+          file,
         ], { stdio: "ignore" });
         c.on("close", () => resolve());
         c.on("error", () => resolve());
       });
+      return file;
+    }
 
-      const [withT, withoutT] = await Promise.all([
-        frameBytes(outFile, expectTextAt),
-        frameBytes(bare, expectTextAt),
-      ]);
+    async function assertDiffers(bare: string, at: number, what: string, minDelta = 0) {
+      const [before, after] = await Promise.all([frameBytes(outFile, at), frameBytes(bare, at)]);
+      if (!before || !after) return `  ⚠ COULD NOT COMPARE FRAMES`;
+      // Byte equality is the right test when the two graphs are otherwise
+      // identical (titles). Adding an overlay changes the encoder's decisions
+      // everywhere, though, so a layer needs a threshold: without one, x264
+      // noise alone would pass a layer that never drew.
+      if (minDelta > 0) {
+        if (meanByteDelta(before, after) < minDelta) return `  ⚠ ${what} NOT RENDERED`;
+      } else if (before.equals(after)) {
+        return `  ⚠ ${what} NOT RENDERED`;
+      }
+      return null;
+    }
 
-      if (!withT || !withoutT) {
-        titlesOk = false;
-        titleNote = "  ⚠ COULD NOT COMPARE FRAMES";
-      } else if (withT.equals(withoutT)) {
-        titlesOk = false;
-        titleNote = "  ⚠ TITLE NOT RENDERED";
+    let notes = "";
+    let drewOk = true;
+
+    if (expectTextAt !== undefined && (await supportsDrawText())) {
+      const bare = await renderVariant("notitle", timeline, false);
+      const problem = await assertDiffers(bare, expectTextAt, "TITLE");
+      if (problem) {
+        drewOk = false;
+        notes += problem;
       } else {
-        titleNote = "  title drawn ✓";
+        notes += "  title drawn ✓";
+      }
+    }
+
+    if (expectLayerAt !== undefined) {
+      const bare = await renderVariant("nolayer", { ...timeline, layers: [] }, await supportsDrawText());
+      const problem = await assertDiffers(bare, expectLayerAt, "LAYER", 2);
+      if (problem) {
+        drewOk = false;
+        notes += problem;
+      } else {
+        notes += "  layer composited ✓";
       }
     }
 
     console.log(
-      `${titlesOk ? "✓" : "✗"} ${name.padEnd(28)} ${v?.width}x${v?.height} ${duration.toFixed(2)}s ` +
+      `${drewOk ? "✓" : "✗"} ${name.padEnd(28)} ${v?.width}x${v?.height} ${duration.toFixed(2)}s ` +
         `${a ? "a/v" : "video-only"}${okDims ? "" : "  ⚠ WRONG DIMS"}` +
-        `${okAudio ? "" : "  ⚠ NO AUDIO"}${titleNote}`,
+        `${okAudio ? "" : "  ⚠ NO AUDIO"}${notes}`,
     );
 
-    if (!okDims || !okAudio || !titlesOk) failures++;
+    if (!okDims || !okAudio || !drewOk) failures++;
     return duration;
   } catch (err) {
     console.log(`✗ ${name.padEnd(28)}`);
@@ -250,7 +334,7 @@ async function main() {
   };
 
   const doc = (over: Partial<TimelineDoc>) =>
-    timelineDocSchema.parse({ version: 1, clips: [], audio: [], duckClipAudio: true, ...over });
+    timelineDocSchema.parse({ clips: [], layers: [], audio: [], duckClipAudio: true, ...over });
 
   console.log(`\nRendering test cases into ${OUT}\n`);
 
@@ -314,7 +398,7 @@ async function main() {
         clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 3 }),
         clip({ id: "b", mediaItemId: ID.p1, duration: 2 }),
       ],
-      audio: [{ musicItemId: null, mediaItemId: null, offset: 0, startAt: 0, volume: 0.8, fadeIn: 1, fadeOut: 2 }],
+      audio: [track({ volume: 0.8, fadeIn: 1, fadeOut: 2 })],
       duckClipAudio: true,
     }),
     [m.v1, m.p1], files, "music.m4a",
@@ -328,7 +412,7 @@ async function main() {
         clip({ id: "a", mediaItemId: ID.p1, duration: 2 }),
         clip({ id: "b", mediaItemId: ID.v2, kind: "video", trimStart: 0, trimEnd: 3, transitionIn: "crossfade", transitionDuration: 0.8 }),
       ],
-      audio: [{ musicItemId: null, mediaItemId: null, offset: 5, startAt: 0, volume: 0.6, fadeIn: 0.5, fadeOut: 1 }],
+      audio: [track({ offset: 5, volume: 0.6, fadeIn: 0.5, fadeOut: 1 })],
     }),
     [m.p1, m.v2], files, "music.m4a",
   );
@@ -377,10 +461,138 @@ async function main() {
         clip({ id: "a", mediaItemId: ID.vs, kind: "video", trimStart: 0, trimEnd: 2 }),
         clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2, transitionIn: "crossfade", transitionDuration: 0.5 }),
       ],
-      audio: [{ musicItemId: null, mediaItemId: null, offset: 0, startAt: 0, volume: 0.7, fadeIn: 0.5, fadeOut: 1 }],
+      audio: [track({ volume: 0.7, fadeIn: 0.5, fadeOut: 1 })],
     }),
     [m.vs, m.v1], files, "music.m4a",
   );
+
+
+  // 12. A still pinned over a video — the plain picture-in-picture path.
+  await runCase(
+    "layer-photo-over-video",
+    doc({
+      clips: [clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4 })],
+      layers: [
+        layer({ id: "l1", mediaItemId: ID.p1, startAt: 1, duration: 2, x: 0.6, y: 0.08, width: 0.3 }),
+      ],
+    }),
+    [m.v1, m.p1], files, null,
+    undefined,
+    2, // the still must actually be on screen here
+  );
+
+  // 13. Two layers at once, stacked, one of them half-transparent and
+  //     full-frame — the compositing order has to survive both.
+  await runCase(
+    "layers-stacked",
+    doc({
+      clips: [clip({ id: "a", mediaItemId: ID.p2, duration: 4 })],
+      layers: [
+        layer({ id: "l1", mediaItemId: ID.v2, kind: "video", layer: 1, startAt: 0.5, duration: 2.5, x: 0.05, y: 0.5, width: 0.4 }),
+        layer({ id: "l2", mediaItemId: ID.p1, layer: 2, startAt: 0, duration: 4, x: 0, y: 0, width: 1, opacity: 0.4, fadeIn: 0.5, fadeOut: 0.5 }),
+      ],
+    }),
+    [m.p2, m.v2, m.p1], files, null,
+    undefined,
+    1.5,
+  );
+
+  // 14. An audible video layer over a video with its own sound, under a bed:
+  //     three things in the mix at once.
+  await runCase(
+    "layer-audio-in-mix",
+    doc({
+      clips: [clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 5 })],
+      layers: [
+        layer({ id: "l1", mediaItemId: ID.v2, kind: "video", startAt: 1, duration: 2, muted: false, volume: 0.9 }),
+      ],
+      audio: [track({ volume: 0.5, fadeIn: 0.5, fadeOut: 1 })],
+    }),
+    [m.v1, m.v2], files, "music.m4a",
+  );
+
+  // 15. Two music cues, the second starting partway in and stopping early.
+  await runCase(
+    "two-audio-cues",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 3 }),
+        clip({ id: "b", mediaItemId: ID.p2, duration: 3 }),
+      ],
+      audio: [
+        track({ volume: 0.5, fadeIn: 0.5, fadeOut: 1, loop: true }),
+        track({ role: "extra", startAt: 2.5, duration: 2, offset: 1, volume: 0.7, fadeIn: 0.3, fadeOut: 0.5 }),
+      ],
+    }),
+    [m.p1, m.p2], files, "music.m4a",
+  );
+
+  // 16. A layer hanging off the end of the picture — it has to be clipped, not
+  //     allowed to stretch the film.
+  await runCase(
+    "layer-past-the-end",
+    doc({
+      clips: [clip({ id: "a", mediaItemId: ID.p1, duration: 2 })],
+      layers: [layer({ id: "l1", mediaItemId: ID.p2, startAt: 1.5, duration: 6, width: 0.5 })],
+    }),
+    [m.p1, m.p2], files, null,
+    undefined,
+    1.8, // still inside the clipped window
+  );
+
+  // 17. Every transition in the library, chained. The point is not the
+  // pictures — it's that each name in XFADE_FOR is a filter FFmpeg actually
+  // has. A typo there fails only at render time, on a real vlog.
+  await runCase(
+    "transition-library",
+    doc({
+      clips: TRANSITIONS.map((transitionIn, i) =>
+        clip({
+          id: `t${i}`,
+          mediaItemId: i % 2 === 0 ? ID.p1 : ID.p2,
+          duration: 1.2,
+          transitionIn,
+          transitionDuration: 0.4,
+        }),
+      ),
+    }),
+    [m.p1, m.p2], files, null,
+  );
+
+  // 18. A hard cut followed by a dissolve — the auto-cut's basic grammar, and
+  // a graph shape nothing else here produced. `concat` returns its output at
+  // timebase 1/1000000, and `xfade` rejects inputs whose timebases disagree,
+  // so this fails outright without the `settb` in the clip chain.
+  await runCase(
+    "cut-then-dissolve",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 1.5 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0.8, trimEnd: 3, transitionIn: "cut" }),
+        clip({ id: "c", mediaItemId: ID.p2, duration: 2, transitionIn: "crossfade", transitionDuration: 0.6 }),
+      ],
+    }),
+    [m.p1, m.v1, m.p2], files, null,
+  );
+
+  // 19. The auto-cut's own output, end to end. The graph this produces is the
+  // one most renders will actually use — short holds, a scene dissolve, a
+  // sub-2s clip muted by the director — so it has to build for real rather
+  // than only in the unit sense.
+  const T0 = Date.UTC(2026, 5, 13, 9, 30);
+  const autoCut: CutEntry[] = [
+    { mediaItemId: ID.p1, kind: "photo", durationSeconds: null, capturedAt: T0, rank: 0 },
+    { mediaItemId: ID.v1, kind: "video", durationSeconds: 6, capturedAt: T0 + 60_000, rank: 3.5 },
+    { mediaItemId: ID.p2, kind: "photo", durationSeconds: null, capturedAt: T0 + 120_000, rank: 0 },
+    // Hours later: a new scene, so the director dissolves into it.
+    { mediaItemId: ID.v2, kind: "video", durationSeconds: 5, capturedAt: T0 + 5 * 3600_000, rank: 0 },
+  ];
+  const directed = runDirector(reconcileClips(emptyTimeline(), autoCut), {
+    cut: autoCut,
+    threshold: 0,
+    settings: { enabled: true, pace: "snappy", sceneText: true },
+  });
+  await runCase("director-output", directed, [m.p1, m.v1, m.p2, m.v2], files, null);
 
   console.log(
     failures === 0

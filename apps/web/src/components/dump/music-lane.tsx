@@ -3,7 +3,12 @@
 import { useMemo, useState, useTransition } from "react";
 import type { ReactionTier } from "@vlogbuddy/shared";
 import type { MusicItemView } from "@/lib/queries";
-import { addMusicAction, deleteMusicAction, moveMusicAction } from "@/lib/actions/music";
+import {
+  addMusicAction,
+  deleteMusicAction,
+  moveMusicAction,
+  requestAudioExtractionAction,
+} from "@/lib/actions/music";
 import { setMusicBedAction } from "@/lib/actions/cut";
 import { SectionHead } from "../brand";
 import { ReactionBar } from "./reaction-bar";
@@ -192,6 +197,33 @@ export function MusicLane({
                     </div>
                   </div>
                 </div>
+
+                {/* Whether there's a file behind the link yet — a bed with no
+                    sound is otherwise just unexplained silence in the editor. */}
+                {!track.extractedAudioKey && (
+                  <p
+                    className="mt-1.5 font-mono text-2xs text-ink-500"
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    {track.status === "pending" || track.status === "processing" ? (
+                      "Getting the sound…"
+                    ) : track.status === "failed" ? (
+                      <button
+                        onClick={() =>
+                          startTransition(() =>
+                            requestAudioExtractionAction(slug, track.id).then(() => {}),
+                          )
+                        }
+                        className="text-signal-400 underline-offset-2 hover:underline"
+                        title={track.error ?? undefined}
+                      >
+                        Sound didn&apos;t come through — try again
+                      </button>
+                    ) : (
+                      "Plays here, silent in the film"
+                    )}
+                  </p>
+                )}
 
                 <div
                   className="mt-2 flex items-end justify-between gap-1"

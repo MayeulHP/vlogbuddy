@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactionTier } from "@vlogbuddy/shared";
+import { formatDayLong, type ReactionTier } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { reactAction } from "@/lib/actions/reactions";
 import { cn } from "@/lib/cn";
@@ -488,12 +488,5 @@ function AllCaughtUp({
 }
 
 function captureLabel(value: Date | string | null) {
-  if (!value) return "No date";
-  const d = typeof value === "string" ? new Date(value) : value;
-  if (!Number.isFinite(d.getTime())) return "No date";
-  return d.toLocaleDateString(undefined, {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
+  return formatDayLong(value) ?? "No date";
 }

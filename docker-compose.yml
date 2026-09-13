@@ -88,6 +88,9 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_PRESIGN_EXPIRY: ${S3_PRESIGN_EXPIRY}
       SESSION_SECRET: ${SESSION_SECRET}
+      # Guards /admin and vlog creation. Empty means the admin area is sealed.
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
       ENABLE_YT_AUDIO: ${ENABLE_YT_AUDIO}
       PORT: 3000

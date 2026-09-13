@@ -2,23 +2,28 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  clipDuration,
+  audioTrackSpan,
   clipStartTimes,
   formatDuration,
+  layersInPaintOrder,
   timelineDuration,
+  type AudioTrack,
+  type LayerClip,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
-import type { MediaItemView } from "@/lib/queries";
+import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
 
 /**
- * Preview of the assembled cut. Plays the low-res proxies clip by clip and
- * holds photos for their duration — close enough to judge pacing without
+ * Preview of the assembled cut. Plays the low-res proxies clip by clip, holds
+ * photos for their duration, stacks the layers over the top and runs the audio
+ * stack underneath — close enough to judge pacing and placement without
  * rendering anything. The real output comes from FFmpeg server-side.
  */
 export function PreviewPlayer({
   timeline,
   mediaById,
+  musicById,
   durations,
   playheadTime,
   onTimeChange,
@@ -27,6 +32,7 @@ export function PreviewPlayer({
 }: {
   timeline: TimelineDoc;
   mediaById: Map<string, MediaItemView>;
+  musicById: Map<string, MusicItemView>;
   durations: Record<string, number | null>;
   playheadTime: number;
   onTimeChange: (t: number) => void;
@@ -36,6 +42,43 @@ export function PreviewPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
+  /**
+   * Every <audio> in the stack, so the play button can start them from inside
+   * the click. Browsers only hand an element permission to make sound during a
+   * user gesture; an effect that runs a tick later is already too late, and the
+   * rejection is silent — which is exactly what "the music doesn't play" looks
+   * like.
+   */
+  const audioEls = useRef(new Map<string, HTMLAudioElement>());
+  const [audioBlocked, setAudioBlocked] = useState(false);
+
+  const registerAudio = useCallback((id: string, el: HTMLAudioElement | null) => {
+    if (el) audioEls.current.set(id, el);
+    else audioEls.current.delete(id);
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    const next = !playing;
+    setPlaying(next);
+    if (!next) return;
+
+    setAudioBlocked(false);
+    for (const el of audioEls.current.values()) {
+      // Silent for this instant; the per-track effect sets the real level and
+      // pauses anything the playhead hasn't reached yet.
+      el.volume = 0;
+      const started = el.play();
+      if (started) {
+        started.catch((err: unknown) => {
+          // Pausing a track that shouldn't be audible yet rejects too — only an
+          // outright refusal means the browser is holding the sound back.
+          if (err instanceof DOMException && err.name === "NotAllowedError") {
+            setAudioBlocked(true);
+          }
+        });
+      }
+    }
+  }, [playing]);
 
   const total = useMemo(() => timelineDuration(timeline, durations), [timeline, durations]);
   const starts = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
@@ -54,6 +97,14 @@ export function PreviewPlayer({
   }, [timeline.clips, starts, playheadTime]);
 
   const activeMedia = active ? mediaById.get(active.clip.mediaItemId) ?? null : null;
+
+  const visibleLayers = useMemo(
+    () =>
+      layersInPaintOrder(timeline).filter(
+        (l) => playheadTime >= l.startAt && playheadTime < l.startAt + l.duration,
+      ),
+    [timeline, playheadTime],
+  );
 
   // Drive playback: video elements advance themselves, photos need a timer.
   useEffect(() => {
@@ -126,7 +177,10 @@ export function PreviewPlayer({
 
   return (
     <div className="border border-[color:var(--hair-dark)] bg-ink-950">
-      <div className="relative aspect-video bg-black">
+      {/* Clipped, because FFmpeg crops a layer at the frame edge and the
+          preview has to agree — a tall portrait inset otherwise spills out
+          over the transport. */}
+      <div className="relative aspect-video overflow-hidden bg-black">
         {src ? (
           active?.clip.kind === "video" ? (
             <video
@@ -152,6 +206,17 @@ export function PreviewPlayer({
             Developing…
           </div>
         )}
+
+        {/* Layers, in the same paint order the renderer uses. */}
+        {visibleLayers.map((layer) => (
+          <LayerView
+            key={layer.id}
+            layer={layer}
+            media={mediaById.get(layer.mediaItemId) ?? null}
+            playheadTime={playheadTime}
+            playing={playing}
+          />
+        ))}
 
         {/* Title overlays, positioned as they'll appear in the render. */}
         {active &&
@@ -183,10 +248,23 @@ export function PreviewPlayer({
             ))}
       </div>
 
+      {/* The audio stack. Nothing to look at — it just has to be audible. */}
+      {timeline.audio.map((track) => (
+        <TrackAudio
+          key={track.id}
+          track={track}
+          src={audioSrcFor(track, mediaById, musicById)}
+          span={audioTrackSpan(track, total)}
+          playheadTime={playheadTime}
+          playing={playing}
+          onElement={registerAudio}
+        />
+      ))}
+
       {/* Transport */}
       <div className="flex items-center gap-3 border-t border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
         <button
-          onClick={() => setPlaying((p) => !p)}
+          onClick={togglePlay}
           className="shrink-0 border border-[color:var(--hair-dark)] px-2 py-1 font-mono text-[11px] text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
           aria-label={playing ? "Pause" : "Play"}
         >
@@ -210,6 +288,12 @@ export function PreviewPlayer({
           aria-label="Playhead"
         />
 
+        {visibleLayers.length > 0 && (
+          <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-tape-400">
+            +{visibleLayers.length} layer{visibleLayers.length === 1 ? "" : "s"}
+          </span>
+        )}
+
         {active && (
           <button
             onClick={() => onSelectClip(active.clip.id)}
@@ -219,6 +303,202 @@ export function PreviewPlayer({
           </button>
         )}
       </div>
+
+      {audioBlocked && (
+        <p className="border-t border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2 text-[13px] leading-relaxed text-ink-300">
+          Your browser is holding the sound back. Press play once more and it&apos;ll come
+          through.
+        </p>
+      )}
     </div>
   );
+}
+
+/**
+ * One layer over the picture. Geometry is stored as fractions of the frame, so
+ * percentages here land in the same place FFmpeg will put them.
+ */
+function LayerView({
+  layer,
+  media,
+  playheadTime,
+  playing,
+}: {
+  layer: LayerClip;
+  media: MediaItemView | null;
+  playheadTime: number;
+  playing: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const offset = playheadTime - layer.startAt;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = Math.min(1, layer.volume);
+    const target = layer.trimStart + offset;
+    if (Math.abs(video.currentTime - target) > 0.35) video.currentTime = Math.max(0, target);
+    if (playing && video.paused) void video.play().catch(() => {});
+    if (!playing && !video.paused) video.pause();
+  }, [offset, playing, layer.trimStart, layer.volume]);
+
+  if (!media) return null;
+
+  // Match the renderer's alpha fades so a layer doesn't pop in the preview and
+  // dissolve in the export.
+  const fadeIn = Math.min(layer.fadeIn, layer.duration / 2);
+  const fadeOut = Math.min(layer.fadeOut, layer.duration / 2);
+  const fade =
+    fadeIn > 0.01 && offset < fadeIn
+      ? offset / fadeIn
+      : fadeOut > 0.01 && offset > layer.duration - fadeOut
+        ? Math.max(0, (layer.duration - offset) / fadeOut)
+        : 1;
+
+  const src = layer.kind === "video" ? media.proxyUrl ?? media.originalUrl : media.originalUrl;
+  if (!src) return null;
+
+  const style: React.CSSProperties = {
+    left: `${layer.x * 100}%`,
+    top: `${layer.y * 100}%`,
+    width: `${layer.width * 100}%`,
+    opacity: layer.opacity * fade,
+  };
+
+  return layer.kind === "video" ? (
+    <video
+      ref={videoRef}
+      key={layer.id}
+      src={src}
+      style={style}
+      className="pointer-events-none absolute"
+      playsInline
+      muted={layer.muted}
+    />
+  ) : (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={src} alt="" style={style} className="pointer-events-none absolute" />
+  );
+}
+
+/**
+ * An audio track, kept in step with the playhead — the same clock the picture
+ * runs on, so scrubbing, playing and pausing can't drift apart. Fades and
+ * looping are mirrored from the renderer so the preview doesn't lie about the
+ * mix.
+ */
+function TrackAudio({
+  track,
+  src,
+  span,
+  playheadTime,
+  playing,
+  onElement,
+}: {
+  track: AudioTrack;
+  src: string | null;
+  span: number;
+  playheadTime: number;
+  playing: boolean;
+  onElement: (id: string, el: HTMLAudioElement | null) => void;
+}) {
+  const ref = useRef<HTMLAudioElement>(null);
+  // The file's length only lands once metadata loads, and looping needs it.
+  const [metadataSeq, setMetadataSeq] = useState(0);
+
+  useEffect(() => {
+    const audio = ref.current;
+    if (!audio) return;
+
+    const within =
+      span > 0 && playheadTime >= track.startAt && playheadTime < track.startAt + span;
+    if (!within || track.muted) {
+      audio.volume = 0;
+      if (!audio.paused) audio.pause();
+      return;
+    }
+
+    const elapsed = playheadTime - track.startAt;
+
+    // Same fade shape the filter graph builds, clamped so a long fade on a
+    // short track doesn't swallow the whole thing.
+    const fadeIn = Math.min(track.fadeIn, span / 2);
+    const fadeOut = Math.min(track.fadeOut, span / 2);
+    const fade =
+      fadeIn > 0.01 && elapsed < fadeIn
+        ? elapsed / fadeIn
+        : fadeOut > 0.01 && elapsed > span - fadeOut
+          ? Math.max(0, (span - elapsed) / fadeOut)
+          : 1;
+    audio.volume = Math.max(0, Math.min(1, track.volume * fade));
+
+    const fileDuration =
+      Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+
+    let target = track.offset + elapsed;
+    if (fileDuration !== null && target >= fileDuration) {
+      if (!track.loop) {
+        // The file ran out before the picture did.
+        if (!audio.paused) audio.pause();
+        return;
+      }
+      const window = Math.max(0.1, fileDuration - track.offset);
+      target = track.offset + ((target - track.offset) % window);
+    }
+
+    if (Math.abs(audio.currentTime - target) > 0.35) {
+      // Seeking before the media is ready throws in some browsers; the
+      // loadedmetadata bump below runs this again.
+      try {
+        audio.currentTime = Math.max(0, target);
+      } catch {
+        /* not seekable yet */
+      }
+    }
+
+    if (playing && audio.paused) void audio.play().catch(() => {});
+    if (!playing && !audio.paused) audio.pause();
+  }, [
+    playheadTime,
+    playing,
+    span,
+    metadataSeq,
+    track.muted,
+    track.offset,
+    track.startAt,
+    track.volume,
+    track.fadeIn,
+    track.fadeOut,
+    track.loop,
+  ]);
+
+  // Hand the element to the player so the play button can start it from inside
+  // the click, and drop it again when the track or its source goes away.
+  const id = track.id;
+  useEffect(() => {
+    const audio = ref.current;
+    onElement(id, audio);
+    return () => onElement(id, null);
+  }, [id, src, onElement]);
+
+  if (!src) return null;
+  return (
+    <audio
+      ref={ref}
+      src={src}
+      preload="auto"
+      className="hidden"
+      onLoadedMetadata={() => setMetadataSeq((n) => n + 1)}
+    />
+  );
+}
+
+function audioSrcFor(
+  track: AudioTrack,
+  mediaById: Map<string, MediaItemView>,
+  musicById: Map<string, MusicItemView>,
+): string | null {
+  if (track.mediaItemId) return mediaById.get(track.mediaItemId)?.originalUrl ?? null;
+  if (track.musicItemId) return musicById.get(track.musicItemId)?.audioUrl ?? null;
+  return null;
 }

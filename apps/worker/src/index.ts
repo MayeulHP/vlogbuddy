@@ -1,4 +1,5 @@
 import PgBoss from "pg-boss";
+import { getRenderSettings } from "@vlogbuddy/db";
 import { mkdir } from "node:fs/promises";
 import { env } from "./env";
 import { processMedia, type ProcessMediaJob } from "./jobs/process-media";
@@ -96,8 +97,10 @@ async function main() {
     },
   );
 
+  const format = await getRenderSettings();
   console.log(
-    `[worker] ready — render ${e.RENDER_HEIGHT}p@${e.RENDER_FPS}, ` +
+    `[worker] ready — render ${format.renderHeight}p@${format.renderFps} ` +
+      `(crf ${format.renderCrf}, ${format.renderPreset}; change it on /admin), ` +
       `yt-audio ${e.ENABLE_YT_AUDIO ? "ENABLED" : "disabled"}`,
   );
 
