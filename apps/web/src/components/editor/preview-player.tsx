@@ -262,7 +262,7 @@ export function PreviewPlayer({
       ))}
 
       {/* Transport */}
-      <div className="flex items-center gap-3 border-t border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
+      <div className="flex items-center gap-2 border-t border-[color:var(--hair-dark)] bg-ink-900 px-2 py-2 sm:gap-3 sm:px-3">
         <button
           onClick={togglePlay}
           className="shrink-0 border border-[color:var(--hair-dark)] px-2 py-1 font-mono text-[11px] text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
@@ -284,7 +284,7 @@ export function PreviewPlayer({
           step={0.05}
           value={playheadTime}
           onChange={(e) => seek(Number(e.target.value))}
-          className="slider slider-dark flex-1"
+          className="slider slider-dark w-full min-w-0 flex-1"
           aria-label="Playhead"
         />
 
@@ -297,7 +297,7 @@ export function PreviewPlayer({
         {active && (
           <button
             onClick={() => onSelectClip(active.clip.id)}
-            className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-400 transition-colors hover:text-paper-100"
+            className="hidden shrink-0 font-mono text-2xs uppercase tracking-label text-ink-400 transition-colors hover:text-paper-100 sm:block"
           >
             Shot {String(active.index + 1).padStart(2, "0")}
           </button>

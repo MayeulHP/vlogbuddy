@@ -89,7 +89,7 @@ export function MusicLane({
       />
 
       {canEdit && (
-        <form onSubmit={submit} className="mt-3 flex items-end gap-3">
+        <form onSubmit={submit} className="mt-3 flex flex-col items-stretch gap-2 sm:flex-row sm:items-end sm:gap-3">
           <label className="min-w-0 flex-1">
             <span className="field-label">Add a track</span>
             <input
@@ -108,7 +108,7 @@ export function MusicLane({
 
       {error && <p className="notice mt-3">{error}</p>}
 
-      <div className="scrollbar-thin scrollbar-dark mt-3 overflow-x-auto bg-ink-900 shadow-print">
+      <div className="scrollbar-thin scrollbar-dark touch-scroll-x mt-3 overflow-x-auto bg-ink-900 shadow-print">
         <div
           className="relative my-4 mx-3 h-32"
           style={{ minWidth: innerWidth }}
@@ -156,7 +156,7 @@ export function MusicLane({
                 key={track.id}
                 data-music-chip={track.id}
                 className={cn(
-                  "absolute top-1/2 w-[176px] -translate-y-1/2 cursor-grab border bg-ink-850 p-2 shadow-deck active:cursor-grabbing",
+                  "absolute top-1/2 w-[176px] -translate-y-1/2 cursor-grab touch-none border bg-ink-850 p-2 shadow-deck active:cursor-grabbing",
                   draggingId === track.id
                     ? "z-20 border-signal-500"
                     : isBed
@@ -249,7 +249,7 @@ export function MusicLane({
                         )
                       }
                       className={cn(
-                        "px-1 py-0.5 font-mono text-2xs uppercase tracking-label transition-colors",
+                        "flex min-h-[30px] min-w-[28px] items-center justify-center px-1 font-mono text-2xs uppercase tracking-label transition-colors",
                         isBed ? "text-signal-400" : "text-ink-400 hover:text-paper-100",
                       )}
                       title={isBed ? "Take it off the cut" : "Play this one under the cut"}
@@ -258,7 +258,7 @@ export function MusicLane({
                     </button>
                     <button
                       onClick={() => setPlaying(playing === track.id ? null : track.id)}
-                      className="px-1 py-0.5 font-mono text-2xs text-ink-400 transition-colors hover:text-paper-100"
+                      className="flex min-h-[30px] min-w-[28px] items-center justify-center px-1 font-mono text-2xs text-ink-400 transition-colors hover:text-paper-100"
                       title="Preview"
                     >
                       {playing === track.id ? "▲" : "▶"}
@@ -268,7 +268,7 @@ export function MusicLane({
                         onClick={() =>
                           startTransition(() => deleteMusicAction(slug, track.id).then(() => {}))
                         }
-                        className="px-1 py-0.5 font-mono text-2xs text-ink-400 transition-colors hover:text-signal-400"
+                        className="flex min-h-[30px] min-w-[28px] items-center justify-center px-1 font-mono text-2xs text-ink-400 transition-colors hover:text-signal-400"
                         title="Remove your track"
                       >
                         ✕
