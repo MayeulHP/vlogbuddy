@@ -92,7 +92,7 @@ export function LayerPanel({
                   });
                   setPicking(false);
                 }}
-                className="flex w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-ink-800"
+                className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-ink-800"
               >
                 {item.thumbnailUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -125,7 +125,7 @@ export function LayerPanel({
                 key={layer.id}
                 onClick={() => onSelect({ kind: "layer", id: layer.id })}
                 className={cn(
-                  "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
+                  "flex min-h-[44px] w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
                   active
                     ? "bg-signal-900/40 text-paper-100"
                     : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
@@ -230,7 +230,7 @@ export function SoundPanel({
                     });
                     setPicking(false);
                   }}
-                  className="flex w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200"
+                  className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200"
                 >
                   <span className="eyebrow-light w-10 shrink-0">File</span>
                   <span className="min-w-0 flex-1 truncate">{item.originalFilename}</span>
@@ -247,7 +247,7 @@ export function SoundPanel({
                     });
                     setPicking(false);
                   }}
-                  className="flex w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200 disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200 disabled:opacity-40 disabled:hover:bg-transparent"
                   title={item.extractedAudioKey ? undefined : "No audio file for this track yet"}
                 >
                   <span className="eyebrow-light w-10 shrink-0">Link</span>
@@ -273,7 +273,7 @@ export function SoundPanel({
               key={track.id}
               onClick={() => onSelect({ kind: "audio", id: track.id })}
               className={cn(
-                "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
+                "flex min-h-[44px] w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
                 active
                   ? "bg-signal-900/40 text-paper-100"
                   : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
@@ -358,7 +358,7 @@ function BedChoice({
     <button
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
+        "flex min-h-[44px] w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
         active
           ? "bg-signal-900/40 text-paper-100"
           : "text-ink-400 hover:bg-ink-800 hover:text-paper-200",

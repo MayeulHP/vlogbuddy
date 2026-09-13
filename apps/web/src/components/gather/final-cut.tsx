@@ -19,6 +19,7 @@ import {
   setMusicBedAction,
 } from "@/lib/actions/cut";
 import { SectionHead } from "../brand";
+import { useIsTouch } from "@/hooks/use-media-query";
 import { cn } from "@/lib/cn";
 
 /**
@@ -42,6 +43,7 @@ export function FinalCut({
   timeline: TimelineDoc;
   onOpenClip?: (item: MediaItemView) => void;
 }) {
+  const touch = useIsTouch();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [trayOpen, setTrayOpen] = useState(false);
@@ -116,6 +118,33 @@ export function FinalCut({
     });
   }
 
+  /** Commits a new running order and keeps the strip from snapping back. */
+  function commitOrder(next: string[]) {
+    setPendingOrder(next);
+    startTransition(async () => {
+      const res = await reorderCutAction(slug, next);
+      if (!res.ok) setError(res.error);
+      setPendingOrder(null);
+    });
+  }
+
+  /**
+   * Nudging a shot one place along.
+   *
+   * HTML5 drag-and-drop never fires on a touchscreen, so on a phone the strip
+   * would be a read-only picture of the cut. Two arrows on the frame do the
+   * same job with a thumb, one shot at a time.
+   */
+  function nudge(id: string, delta: -1 | 1) {
+    const ids = inCut.map((row) => row.item.id);
+    const from = ids.indexOf(id);
+    const to = from + delta;
+    if (from === -1 || to < 0 || to >= ids.length) return;
+    const next = [...ids];
+    next.splice(to, 0, next.splice(from, 1)[0]);
+    commitOrder(next);
+  }
+
   function drop(toIndex: number) {
     if (!draggingId) return;
     const ids = inCut.map((row) => row.item.id);
@@ -127,12 +156,7 @@ export function FinalCut({
     const next = [...ids];
     next.splice(from, 1);
     next.splice(from < toIndex ? toIndex - 1 : toIndex, 0, draggingId);
-    setPendingOrder(next);
-    startTransition(async () => {
-      const res = await reorderCutAction(slug, next);
-      if (!res.ok) setError(res.error);
-      setPendingOrder(null);
-    });
+    commitOrder(next);
   }
 
   return (
@@ -140,20 +164,24 @@ export function FinalCut({
       <SectionHead
         eyebrow="Beat 04 · Shortlist"
         title="The rough cut"
-        note="Assembled from the crew's marks, live. Drag to reorder, ✕ to drop a shot, or pull one back off the floor."
+        note={
+          touch
+            ? "Assembled from the crew's marks, live. Use the arrows to move a shot, ✕ to drop it, or pull one back off the floor."
+            : "Assembled from the crew's marks, live. Drag to reorder, ✕ to drop a shot, or pull one back off the floor."
+        }
         right={
-          <div className="flex items-stretch gap-3">
+          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:gap-3">
             {pinned > 0 && (
               <button
                 onClick={() => run(() => resetCutAction(slug))}
                 disabled={pending}
-                className="btn-outline self-end"
+                className="btn-outline order-2 sm:order-none sm:self-end"
                 title="Forget every manual change and go back to what the crew marked"
               >
                 ↺ Revert to the votes
               </button>
             )}
-            <div className="border border-[color:var(--hair-strong)] bg-paper-50 px-3 py-2 text-right">
+            <div className="order-1 border border-[color:var(--hair-strong)] bg-paper-50 px-3 py-2 text-right sm:order-none">
               <p className="eyebrow">Running time</p>
               <p className="timecode mt-0.5 text-lg leading-none">{formatDuration(total)}</p>
               <p className="eyebrow mt-1">
@@ -177,7 +205,7 @@ export function FinalCut({
           </p>
         </div>
       ) : (
-        <div className="scrollbar-thin scrollbar-dark mt-4 overflow-x-auto bg-ink-900 shadow-print">
+        <div className="scrollbar-thin scrollbar-dark touch-scroll-x mt-4 overflow-x-auto bg-ink-900 shadow-print">
           <div className="perf-strip px-3 py-[13px]">
             <div className="flex items-stretch">
               {inCut.map(({ clip, item }, index) => (
@@ -245,7 +273,13 @@ export function FinalCut({
                       </span>
                     )}
 
-                    <span className="pointer-events-none absolute bottom-0 right-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200">
+                    <span
+                      className={cn(
+                        "pointer-events-none absolute right-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200",
+                        // Clear of the nudge arrows that only exist on touch.
+                        touch ? "bottom-8" : "bottom-0",
+                      )}
+                    >
                       {formatDuration(clipDuration(clip, durations[item.id]))}
                     </span>
 
@@ -259,11 +293,32 @@ export function FinalCut({
                           }),
                         )
                       }
-                      className="absolute right-0 top-0 bg-ink-950/75 px-1.5 py-0.5 font-mono text-2xs text-paper-200 opacity-0 transition-opacity hover:bg-signal-600 focus:opacity-100 group-hover:opacity-100"
+                      className="touch-visible absolute right-0 top-0 flex min-h-[30px] min-w-[30px] items-center justify-center bg-ink-950/75 px-1.5 py-0.5 font-mono text-2xs text-paper-200 opacity-0 transition-opacity hover:bg-signal-600 focus:opacity-100 group-hover:opacity-100"
                       title="Drop this shot from the cut"
                     >
                       ✕
                     </button>
+
+                    {touch && (
+                      <div className="absolute inset-x-0 bottom-0 flex justify-between">
+                        <button
+                          onClick={() => nudge(item.id, -1)}
+                          disabled={index === 0 || pending}
+                          className="flex h-8 w-9 items-center justify-center bg-ink-950/75 font-mono text-sm text-paper-200 disabled:opacity-25"
+                          aria-label="Move this shot earlier"
+                        >
+                          ◀
+                        </button>
+                        <button
+                          onClick={() => nudge(item.id, 1)}
+                          disabled={index === inCut.length - 1 || pending}
+                          className="flex h-8 w-9 items-center justify-center bg-ink-950/75 font-mono text-sm text-paper-200 disabled:opacity-25"
+                          aria-label="Move this shot later"
+                        >
+                          ▶
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -294,11 +349,11 @@ export function FinalCut({
           </div>
 
           {/* Sound under the cut, so the whole shape of the film is in one band. */}
-          <div className="flex items-center gap-3 border-t border-[color:var(--hair-dark)] px-3 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[color:var(--hair-dark)] px-3 py-2">
             <span className="eyebrow-light shrink-0">Sound</span>
             {bed ? (
               <>
-                <span className="min-w-0 flex-1 truncate text-xs text-paper-200">
+                <span className="min-w-0 flex-1 basis-40 truncate text-xs text-paper-200">
                   {bed.title ?? bed.url}
                   <span className="timecode ml-2 text-2xs text-ink-400">
                     in at {formatDuration(bedTrack?.startAt ?? 0)}
@@ -348,7 +403,7 @@ export function FinalCut({
                       )
                     }
                     disabled={pending}
-                    className="group relative h-16 w-24 overflow-hidden border border-ink-800 transition-colors hover:border-signal-500"
+                    className="group relative h-16 w-[30%] max-w-[6rem] shrink-0 grow overflow-hidden border border-ink-800 transition-colors hover:border-signal-500 sm:w-24 sm:grow-0"
                     title={`Force ${item.originalFilename} back into the cut`}
                   >
                     {item.thumbnailUrl ? (
@@ -356,12 +411,13 @@ export function FinalCut({
                       <img
                         src={item.thumbnailUrl}
                         alt=""
-                        className="print-tone h-full w-full object-cover opacity-50 transition-opacity group-hover:opacity-100"
+                        loading="lazy"
+                        className="print-tone h-full w-full object-cover opacity-60 transition-opacity group-hover:opacity-100"
                       />
                     ) : (
                       <div className="h-full w-full bg-ink-850 bg-hatch" />
                     )}
-                    <span className="absolute inset-0 flex items-center justify-center font-mono text-base text-paper-50 opacity-0 transition-opacity group-hover:opacity-100">
+                    <span className="touch-visible absolute inset-0 flex items-center justify-center font-mono text-base text-paper-50 opacity-0 transition-opacity group-hover:opacity-100">
                       ＋
                     </span>
                     {item.cutOverride === "exclude" && (

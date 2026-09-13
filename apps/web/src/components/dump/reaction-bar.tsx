@@ -91,8 +91,8 @@ export function ReactionBar({
                   : `${tier.label} — nobody yet`
               }
               className={cn(
-                "relative overflow-hidden border font-mono leading-none tracking-tight transition-all active:translate-y-px",
-                size === "sm" ? "px-1.5 py-[3px] text-[9px]" : "px-2 py-1 text-[11px]",
+                "relative inline-flex items-center justify-center overflow-hidden border font-mono leading-none tracking-tight transition-all active:translate-y-px",
+                size === "sm" ? "mark-sm" : "mark-md",
                 isMine ? "border-signal-500 bg-signal-600 text-paper-50" : idle,
               )}
             >

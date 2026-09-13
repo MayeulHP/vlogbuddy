@@ -173,30 +173,36 @@ export function ReviewDeck({
 
   return (
     <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950">
-      <header className="flex shrink-0 items-end gap-4 border-b border-[color:var(--hair-dark)] px-4 py-3 sm:px-6">
-        <div className="min-w-0 flex-1">
-          <p className="eyebrow-light flex items-center gap-2">
-            <span className="h-1 w-1 bg-signal-500" aria-hidden />
-            Beat 03 · Vote
+      <header className="pt-safe px-safe shrink-0 border-b border-[color:var(--hair-dark)]">
+        <div className="flex items-center gap-2 px-4 py-2.5 sm:items-end sm:gap-4 sm:py-3 sm:px-6">
+          <div className="min-w-0 flex-1">
+            <p className="eyebrow-light flex items-center gap-2">
+              <span className="h-1 w-1 bg-signal-500" aria-hidden />
+              Beat 03 · Vote
+            </p>
+            {/* The full title is a luxury a 375px header can't afford. */}
+            <p className="headline mt-0.5 truncate text-lg text-paper-100 sm:mt-1 sm:text-2xl">
+              <span className="sm:hidden">The dailies</span>
+              <span className="hidden sm:inline">Screening the dailies</span>
+            </p>
+          </div>
+
+          <p className="timecode shrink-0 text-xs text-ink-300 sm:text-sm">
+            {done ? "END" : `${String(index + 1).padStart(2, "0")} / ${String(queue.length).padStart(2, "0")}`}
           </p>
-          <p className="headline mt-1 text-2xl text-paper-100">Screening the dailies</p>
+
+          <button
+            onClick={undo}
+            disabled={index === 0}
+            className="btn-quiet-dark shrink-0 px-2"
+            title="Undo the last mark (Z)"
+          >
+            ↩<span className="ml-1 hidden sm:inline">Undo</span>
+          </button>
+          <button onClick={onClose} className="btn-outline-dark shrink-0" aria-label="Leave the screening">
+            Done
+          </button>
         </div>
-
-        <p className="timecode shrink-0 text-sm text-ink-300">
-          {done ? "END" : `${String(index + 1).padStart(2, "0")} / ${String(queue.length).padStart(2, "0")}`}
-        </p>
-
-        <button
-          onClick={undo}
-          disabled={index === 0}
-          className="btn-quiet-dark shrink-0"
-          title="Undo the last mark (Z)"
-        >
-          ↩ Undo
-        </button>
-        <button onClick={onClose} className="btn-outline-dark shrink-0" aria-label="Leave the screening">
-          Done
-        </button>
       </header>
 
       {/* Progress as exposed film: perforations fill up as you work through. */}
@@ -211,7 +217,7 @@ export function ReviewDeck({
         <AllCaughtUp count={queue.length} onClose={onClose} onUndo={undo} />
       ) : (
         <>
-          <div className="relative flex min-h-0 flex-1 items-center justify-center px-4 py-5">
+          <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 py-3 sm:px-4 sm:py-5">
             {/* The next frame, peeking through — a deck should feel like a deck. */}
             {upNext && (
               <Card
@@ -241,6 +247,7 @@ export function ReviewDeck({
                 onPointerDown={(e) => {
                   if (exiting) return;
                   startRef.current = { x: e.clientX, y: e.clientY };
+                  // Capture, so a swipe that runs off the frame keeps reporting.
                   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
                   setDrag({ x: 0, y: 0, active: true });
                 }}
@@ -258,11 +265,17 @@ export function ReviewDeck({
                   if (leaning) commit(leaning);
                   else setDrag({ x: 0, y: 0, active: false });
                 }}
+                onPointerCancel={() => {
+                  // A system gesture took the pointer — put the frame back.
+                  startRef.current = null;
+                  setDrag({ x: 0, y: 0, active: false });
+                }}
               />
             )}
           </div>
 
-          <footer className="shrink-0 px-4 pb-7 pt-1 sm:px-6">
+          <footer className="pb-safe px-safe shrink-0">
+            <div className="px-4 pb-3 pt-1 sm:px-6 sm:pb-7">
             <div className="mx-auto grid max-w-lg grid-cols-4 gap-px border border-[color:var(--hair-dark)]">
               <VerdictKey
                 label="Pass"
@@ -288,8 +301,10 @@ export function ReviewDeck({
               ))}
             </div>
             <p className="mt-2 text-center font-mono text-2xs uppercase tracking-label text-ink-500">
-              Swipe the frame, or use the arrow keys
+              <span className="sm:hidden">Swipe the frame, or tap a verdict</span>
+              <span className="hidden sm:inline">Swipe the frame, or use the arrow keys</span>
             </p>
+            </div>
           </footer>
         </>
       )}
@@ -323,7 +338,7 @@ function Card({
       {...handlers}
       style={style}
       className={cn(
-        "flex h-full max-h-[74vh] w-full max-w-3xl flex-col border border-ink-700 bg-ink-900 p-2 shadow-deck",
+        "flex h-full max-h-[74dvh] w-full max-w-3xl flex-col border border-ink-700 bg-ink-900 p-1.5 shadow-deck sm:p-2",
         className,
       )}
     >
@@ -356,7 +371,7 @@ function Card({
       </div>
 
       {/* Slate under the frame: who shot it, when, and how the crew stands. */}
-      <div className="flex shrink-0 items-end justify-between gap-3 pt-2">
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-x-3 gap-y-1 pt-2">
         <div className="min-w-0">
           <p className="font-mono text-2xs uppercase tracking-label text-ink-400">
             {item.uploaderName ?? "Unknown"} · {captureLabel(item.capturedAt)}
@@ -441,7 +456,7 @@ function VerdictKey({
       onClick={onClick}
       title={`${label} (${hint})`}
       className={cn(
-        "flex flex-col items-center gap-1 bg-ink-900 py-3 transition-colors active:translate-y-px",
+        "flex min-h-[56px] flex-col items-center justify-center gap-1 bg-ink-900 px-1 py-3 transition-colors active:translate-y-px",
         active
           ? "bg-signal-600 text-paper-50"
           : signal
@@ -450,8 +465,9 @@ function VerdictKey({
       )}
     >
       <span className="font-mono text-[11px] leading-none tracking-tight">{marks}</span>
-      <span className="display-sm text-lg leading-none">{label}</span>
-      <span className="font-mono text-2xs opacity-60">{hint}</span>
+      <span className="display-sm text-center text-[0.95rem] leading-none sm:text-lg">{label}</span>
+      {/* The keyboard hint is noise on a device with no keyboard. */}
+      <span className="hidden font-mono text-2xs opacity-60 sm:inline">{hint}</span>
     </button>
   );
 }

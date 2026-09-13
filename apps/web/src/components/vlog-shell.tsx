@@ -108,41 +108,45 @@ export function VlogShell(props: VlogShellProps) {
   return (
     <div className={cn("flex min-h-screen flex-col", dark ? "bg-ink-900" : "bg-paper-100")}>
       {/* ---------- masthead: always paper, whatever room you're in ---------- */}
-      <header className="sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
+      <header className="pt-safe px-safe sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-7">
-          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-3">
-            <div className="flex min-w-0 items-baseline gap-3">
-              <Wordmark size="sm" className="shrink-0" />
-              <span aria-hidden className="h-4 w-px shrink-0 bg-[color:var(--hair-strong)]" />
-              <div className="min-w-0">
-                <h1 className="headline truncate text-xl leading-none sm:text-2xl">
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-2.5 sm:pt-3">
+            <div className="flex min-w-0 flex-1 items-baseline gap-2 sm:gap-3">
+              <Wordmark size="sm" className="hidden shrink-0 sm:inline-flex" />
+              <span
+                aria-hidden
+                className="hidden h-4 w-px shrink-0 bg-[color:var(--hair-strong)] sm:block"
+              />
+              <div className="min-w-0 flex-1">
+                <h1 className="headline truncate text-lg leading-none sm:text-2xl">
                   {vlog.title}
                 </h1>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex shrink-0 items-center gap-2 sm:gap-3">
               <PresenceBar presence={presence} connected={connected} selfId={member.id} />
               <ShareBar shareUrl={shareUrl} />
             </div>
           </div>
 
           {/* Slate line — the numbers, in mono, never shouting. */}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <div className="scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0">
             {[
               `${media.length} clip${media.length === 1 ? "" : "s"}`,
               `${music.length} track${music.length === 1 ? "" : "s"}`,
               `${props.members.length} crew`,
               VLOG_STATE_LABELS[state],
             ].map((bit, i) => (
-              <span key={bit} className="flex items-center gap-3">
+              <span key={bit} className="flex shrink-0 items-center gap-3">
                 {i > 0 && <span aria-hidden className="h-2.5 w-px bg-[color:var(--hair)]" />}
-                <span className="eyebrow">{bit}</span>
+                <span className="eyebrow whitespace-nowrap">{bit}</span>
               </span>
             ))}
           </div>
 
-          <div className="mt-2">
+          {/* On a phone the same three rooms live in the bottom bar instead. */}
+          <div className="mt-2 hidden md:block">
             <WorkspaceNav
               tab={effectiveTab}
               onTab={setTab}
@@ -157,7 +161,7 @@ export function VlogShell(props: VlogShellProps) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-7 sm:px-7">
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-7 sm:py-7">
         {effectiveTab === "gather" && (
           <GatherView
             slug={vlog.shareSlug}
@@ -207,7 +211,7 @@ export function VlogShell(props: VlogShellProps) {
 
       <footer
         className={cn(
-          "border-t px-4 py-3 sm:px-7",
+          "pb-rail border-t px-4 py-3 sm:px-7",
           dark ? "border-[color:var(--hair-dark)]" : "border-[color:var(--hair)]",
         )}
       >
@@ -236,6 +240,19 @@ export function VlogShell(props: VlogShellProps) {
           </span>
         </div>
       </footer>
+
+      {/* The phone's rail: thumb-height, always there, never scrolls away. */}
+      <WorkspaceNav
+        variant="bar"
+        tab={effectiveTab}
+        onTab={setTab}
+        state={state}
+        counts={{
+          clips: props.timeline.clips.length,
+          unrated,
+          hasRender: Boolean(props.latestRender),
+        }}
+      />
     </div>
   );
 }

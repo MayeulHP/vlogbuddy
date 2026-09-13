@@ -82,6 +82,9 @@ COPY package.json pnpm-workspace.yaml ./
 COPY packages ./packages
 COPY apps/web/package.json apps/web/next.config.mjs apps/web/server.ts apps/web/tsconfig.json ./apps/web/
 COPY apps/web/src ./apps/web/src
+# Manifest, icons and the service worker — Next serves these straight from disk
+# at runtime, so they have to exist in the runner, not just in the build stage.
+COPY apps/web/public ./apps/web/public
 COPY --from=build /app/apps/web/.next ./apps/web/.next
 
 EXPOSE 3000

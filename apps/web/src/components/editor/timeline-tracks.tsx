@@ -16,6 +16,7 @@ import {
   type TimelineOp,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
+import { useIsTouch } from "@/hooks/use-media-query";
 import { cn } from "@/lib/cn";
 import type { Selection } from "./selection";
 
@@ -31,11 +32,17 @@ import type { Selection } from "./selection";
  * to grab.
  */
 
-const RULER_H = 22;
-const LAYER_H = 34;
-const BASE_H = 78;
-const AUDIO_H = 30;
-const GUTTER = "w-[74px]";
+/**
+ * Lane heights, twice.
+ *
+ * A 30px audio block is a comfortable target for a pointer and a miserable one
+ * for a thumb, and the lane names can't take a fifth of a 375px screen. So the
+ * bench has a touch set of numbers as well as a desk set.
+ */
+const LANES = {
+  desk: { ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]" },
+  touch: { ruler: 26, layer: 44, base: 88, audio: 40, gutter: "w-[52px]" },
+} as const;
 
 const MIN_SCALE = 6;
 const MAX_SCALE = 140;
@@ -65,6 +72,8 @@ export function TimelineTracks({
   onSeek: (t: number) => void;
   onBackToGather?: () => void;
 }) {
+  const touch = useIsTouch();
+  const lanes = touch ? LANES.touch : LANES.desk;
   const [scale, setScale] = useState(28);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -220,21 +229,23 @@ export function TimelineTracks({
 
   return (
     <section className="border border-[color:var(--hair-dark)] bg-ink-850">
-      <div className="flex items-center justify-between gap-3 border-b border-[color:var(--hair-dark)] px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-2 py-1.5 sm:px-3 sm:py-2">
         <p className="eyebrow-light">Reel 02 · Strip</p>
         <div className="flex items-center gap-2">
-          <p className="eyebrow-light hidden sm:block">Drag shots to reorder · layers to retime</p>
+          <p className="eyebrow-light hidden lg:block">
+            {touch ? "Drag layers to retime · tap a shot to trim it" : "Drag shots to reorder · layers to retime"}
+          </p>
           <div className="flex items-stretch border border-[color:var(--hair-dark)]">
             <button
               onClick={() => setScale((s) => clamp(s / 1.5, MIN_SCALE, MAX_SCALE))}
-              className="px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
+              className="flex min-h-[34px] min-w-[34px] items-center justify-center px-2 font-mono text-[13px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
               aria-label="Zoom out"
             >
               −
             </button>
             <button
               onClick={() => setScale((s) => clamp(s * 1.5, MIN_SCALE, MAX_SCALE))}
-              className="border-l border-[color:var(--hair-dark)] px-2 py-0.5 font-mono text-[11px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
+              className="flex min-h-[34px] min-w-[34px] items-center justify-center border-l border-[color:var(--hair-dark)] px-2 font-mono text-[13px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
               aria-label="Zoom in"
             >
               +
@@ -245,19 +256,19 @@ export function TimelineTracks({
 
       <div className="flex">
         {/* Lane names, parked outside the scroll so they're always readable. */}
-        <div className={cn(GUTTER, "shrink-0 border-r border-[color:var(--hair-dark)]")}>
-          <div style={{ height: RULER_H }} />
+        <div className={cn(lanes.gutter, "shrink-0 border-r border-[color:var(--hair-dark)]")}>
+          <div style={{ height: lanes.ruler }} />
           {layerLanes.map((n) => (
             <div
               key={n}
-              style={{ height: LAYER_H }}
+              style={{ height: lanes.layer }}
               className="flex items-center border-t border-[color:var(--hair-dark)] px-2"
             >
               <span className="eyebrow-light truncate">Layer {n}</span>
             </div>
           ))}
           <div
-            style={{ height: BASE_H }}
+            style={{ height: lanes.base }}
             className="flex items-center border-t border-[color:var(--hair-dark)] px-2"
           >
             <span className="eyebrow-light">Picture</span>
@@ -265,7 +276,7 @@ export function TimelineTracks({
           {timeline.audio.map((track, i) => (
             <div
               key={track.id}
-              style={{ height: AUDIO_H }}
+              style={{ height: lanes.audio }}
               className="flex items-center border-t border-[color:var(--hair-dark)] px-2"
             >
               <span className="eyebrow-light truncate">
@@ -275,12 +286,12 @@ export function TimelineTracks({
           ))}
         </div>
 
-        <div className="scrollbar-thin scrollbar-dark min-w-0 flex-1 overflow-x-auto">
+        <div className="scrollbar-thin scrollbar-dark touch-scroll-x min-w-0 flex-1 overflow-x-auto">
           <div ref={laneRef} className="relative" style={{ width: contentWidth }}>
             {/* Ruler */}
             <div
               onClick={seekFromEvent}
-              style={{ height: RULER_H }}
+              style={{ height: lanes.ruler }}
               className="relative cursor-pointer select-none"
             >
               {ticks(totalDuration, scale).map((t) => (
@@ -298,7 +309,7 @@ export function TimelineTracks({
               <div
                 key={laneNumber}
                 onClick={seekFromEvent}
-                style={{ height: LAYER_H }}
+                style={{ height: lanes.layer }}
                 className="relative border-t border-[color:var(--hair-dark)] bg-ink-900/40"
               >
                 {timeline.layers
@@ -348,7 +359,7 @@ export function TimelineTracks({
 
             {/* The base track — still a strip of shots, still drag-to-reorder */}
             <div
-              style={{ height: BASE_H }}
+              style={{ height: lanes.base }}
               className="relative border-t border-[color:var(--hair-dark)]"
               onDragOver={(e) => {
                 e.preventDefault();
@@ -481,7 +492,7 @@ export function TimelineTracks({
                 <div
                   key={track.id}
                   onClick={seekFromEvent}
-                  style={{ height: AUDIO_H }}
+                  style={{ height: lanes.audio }}
                   className="relative border-t border-[color:var(--hair-dark)] bg-ink-900/40"
                 >
                   <div
@@ -499,7 +510,9 @@ export function TimelineTracks({
                       track.muted && "opacity-40",
                       active
                         ? "border-signal-500 bg-signal-900/50 ring-1 ring-signal-500"
-                        : "border-leader-500/60 bg-leader-900/30 hover:border-paper-200/70",
+                        // leader-900 isn't in the palette, so the old class
+                        // compiled away and the track blocks had no fill.
+                        : "border-leader-500/60 bg-leader-600/25 hover:border-paper-200/70",
                     )}
                   >
                     <span className="truncate font-mono text-2xs text-paper-200">

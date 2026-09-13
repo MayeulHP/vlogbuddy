@@ -115,7 +115,7 @@ export function MediaCard({
             const res = await deleteMediaAction(slug, item.id);
             if (!res.ok) setDeleting(false);
           }}
-          className="absolute right-0 top-0 bg-ink-950/70 px-1.5 py-0.5 font-mono text-2xs text-paper-200 opacity-0 transition-opacity hover:bg-signal-600 focus:opacity-100 group-hover:opacity-100"
+          className="touch-visible absolute right-0 top-0 flex min-h-[30px] min-w-[30px] items-center justify-center bg-ink-950/70 px-1.5 py-0.5 font-mono text-2xs text-paper-200 opacity-0 transition-opacity hover:bg-signal-600 focus:opacity-100 group-hover:opacity-100"
           title="Pull your own upload"
         >
           {deleting ? "…" : "✕"}

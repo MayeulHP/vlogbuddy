@@ -123,7 +123,7 @@ export function UploadZone({ slug, onUploaded }: { slug: string; onUploaded?: ()
         }}
         onClick={() => inputRef.current?.click()}
         className={cn(
-          "relative flex min-h-[124px] cursor-pointer flex-col items-center justify-center border border-dashed px-6 py-8 text-center transition-colors",
+          "relative flex min-h-[124px] cursor-pointer flex-col items-center justify-center border border-dashed px-4 py-7 text-center transition-colors sm:px-6 sm:py-8",
           dragging
             ? "border-signal-600 bg-signal-100"
             : "border-[color:var(--hair-strong)] bg-paper-200 bg-hatch hover:border-ink-900 hover:bg-paper-300",
@@ -146,13 +146,17 @@ export function UploadZone({ slug, onUploaded }: { slug: string; onUploaded?: ()
 
         <p
           className={cn(
-            "headline text-[1.9rem]",
+            "headline text-[1.5rem] sm:text-[1.9rem]",
             dragging ? "text-signal-700" : "text-ink-900",
           )}
         >
           {dragging ? "Let go." : "Drop the footage here"}
         </p>
-        <p className="mt-1.5 font-mono text-2xs uppercase tracking-label text-ink-500">
+        {/* On a phone there is nothing to drag from — say what the tap does. */}
+        <p className="mt-1.5 font-mono text-2xs uppercase tracking-label text-ink-500 sm:hidden">
+          Tap to pick from your camera roll
+        </p>
+        <p className="mt-1.5 hidden font-mono text-2xs uppercase tracking-label text-ink-500 sm:block">
           Photos · Video · Audio &nbsp;·&nbsp; or click to pick
         </p>
       </div>

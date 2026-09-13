@@ -110,7 +110,7 @@ export function ImmichPanel({
           </div>
           <button
             onClick={() => setShowForm((v) => !v)}
-            className={cn(showForm ? "btn-quiet" : "btn-outline", "shrink-0")}
+            className={cn(showForm ? "btn-quiet" : "btn-outline", "w-full shrink-0 sm:w-auto")}
           >
             {showForm ? "Cancel" : "Connect"}
           </button>
@@ -147,26 +147,31 @@ export function ImmichPanel({
             </p>
           </div>
 
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button onClick={() => setBrowsing(true)} disabled={busy} className="btn-outline">
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
+            <button
+              onClick={() => setBrowsing(true)}
+              disabled={busy}
+              className="btn-outline flex-1 sm:flex-none"
+            >
               Import an album
             </button>
             <button
               onClick={copyToImmich}
               disabled={busy || pending || mediaCount === 0}
-              className="btn-quiet"
+              className="btn-quiet flex-1 sm:flex-none"
               title={
                 mediaCount === 0
                   ? "Nothing in the pile yet"
                   : "Copy every original in this vlog into your own Immich"
               }
             >
-              ↑ Copy roll to my Immich
+              <span className="sm:hidden">↑ Copy the roll out</span>
+              <span className="hidden sm:inline">↑ Copy roll to my Immich</span>
             </button>
             <button
               onClick={disconnect}
               disabled={busy || pending}
-              className="px-1 font-mono text-[11px] text-ink-400 hover:text-signal-600"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center font-mono text-[11px] text-ink-400 hover:text-signal-600 sm:min-h-0 sm:min-w-0 sm:px-1"
               title="Forget my server and delete the stored key"
             >
               ✕

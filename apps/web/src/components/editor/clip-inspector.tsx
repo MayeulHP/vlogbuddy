@@ -63,6 +63,32 @@ export function ClipInspector({
             {media.originalFilename}
           </p>
         )}
+
+        {/*
+          Reordering by dragging the strip needs a mouse — HTML5 drag events
+          never fire under a fingertip. Two buttons move the shot one place
+          either way, which is also the quieter way to do it on a desk.
+        */}
+        {total > 1 && (
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              onClick={() => onDispatch({ type: "clip.move", clipId: clip.id, toIndex: index - 1 })}
+              disabled={index === 0}
+              className="btn-outline-dark px-2"
+              title="Move this shot earlier"
+            >
+              ◀ Earlier
+            </button>
+            <button
+              onClick={() => onDispatch({ type: "clip.move", clipId: clip.id, toIndex: index + 1 })}
+              disabled={index === total - 1}
+              className="btn-outline-dark px-2"
+              title="Move this shot later"
+            >
+              Later ▶
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="space-y-5 px-4 py-4">

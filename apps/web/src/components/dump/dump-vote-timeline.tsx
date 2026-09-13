@@ -8,17 +8,22 @@ import {
   type ReactionTier,
 } from "@vlogbuddy/shared";
 import { isInCut } from "@/lib/is-in-cut";
+import { useIsCompact, useIsTouch } from "@/hooks/use-media-query";
 import type { MediaItemView } from "@/lib/queries";
 import { setCutLineAction } from "@/lib/actions/cut";
 import { SectionHead } from "../brand";
 import { MediaCard } from "./media-card";
 import { cn } from "@/lib/cn";
 
-const SLOT = 116;
-const CARD_W = 100;
-const PLOT_H = 430;
-const MIN_CARD_H = 72;
-const MAX_CARD_H = 132;
+/**
+ * The plot is drawn at absolute pixel offsets, so the phone layout is a second
+ * set of numbers rather than a set of classes: narrower slots, shorter plot,
+ * and a left gutter that doesn't eat a third of a 375px screen.
+ */
+const METRICS = {
+  wide: { slot: 116, cardW: 100, plotH: 430, minCardH: 72, maxCardH: 132, gutter: 56 },
+  compact: { slot: 88, cardW: 78, plotH: 290, minCardH: 58, maxCardH: 100, gutter: 40 },
+} as const;
 
 function chronoSort(a: MediaItemView, b: MediaItemView) {
   const at = a.capturedAt ? new Date(a.capturedAt).getTime() : Number.MAX_SAFE_INTEGER;
@@ -58,8 +63,12 @@ export function DumpVoteTimeline({
   onOpen: (item: MediaItemView) => void;
   onReview?: () => void;
 }) {
+  const compact = useIsCompact();
+  const touch = useIsTouch();
+  const m = compact ? METRICS.compact : METRICS.wide;
+
   const items = useMemo(
-    () => media.filter((m) => m.kind !== "audio").sort(chronoSort),
+    () => media.filter((m2) => m2.kind !== "audio").sort(chronoSort),
     [media],
   );
 
@@ -138,7 +147,7 @@ export function DumpVoteTimeline({
     return ((rect.height - y) / rect.height) * maxRank;
   }
 
-  const innerWidth = Math.max(items.length * SLOT, 640);
+  const innerWidth = Math.max(items.length * m.slot, compact ? 300 : 640);
   const linePct = (threshold / maxRank) * 100;
 
   const dayMarks = useMemo(() => {
@@ -163,13 +172,13 @@ export function DumpVoteTimeline({
         title="The light table"
         note="Left to right is when it happened. Frames rise as the crew marks them. Drag the red line — everything above it is in the film."
         right={
-          <div className="flex items-stretch gap-3">
+          <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:gap-3">
             {onReview && (
-              <button onClick={onReview} className="btn-outline self-end">
+              <button onClick={onReview} className="btn-outline order-2 sm:order-none sm:self-end">
                 Mark up →
               </button>
             )}
-            <div className="border border-[color:var(--hair-strong)] bg-paper-50 px-3 py-2">
+            <div className="order-1 border border-[color:var(--hair-strong)] bg-paper-50 px-3 py-2 sm:order-none">
               <p className="eyebrow">Selects · Running time</p>
               <p className="timecode mt-0.5 text-lg leading-none">
                 {String(selected.length).padStart(2, "0")}
@@ -187,7 +196,7 @@ export function DumpVoteTimeline({
                   onChange={(e) => setCut(Number(e.target.value), false)}
                   onMouseUp={(e) => persist(Number((e.target as HTMLInputElement).value))}
                   onTouchEnd={(e) => persist(Number((e.target as HTMLInputElement).value))}
-                  className="slider w-32"
+                  className="slider w-full sm:w-32"
                   aria-label="Cut line"
                 />
               </label>
@@ -196,10 +205,16 @@ export function DumpVoteTimeline({
         }
       />
 
-      <div className="scrollbar-thin mt-4 overflow-x-auto border border-[color:var(--hair)] lighttable">
-        <div className="relative px-14 pb-4 pt-7" style={{ minWidth: innerWidth }}>
+      <div className="scrollbar-thin touch-scroll-x mt-4 overflow-x-auto border border-[color:var(--hair)] lighttable">
+        <div
+          className="relative pb-4 pt-7"
+          style={{ minWidth: innerWidth, paddingLeft: m.gutter, paddingRight: m.gutter }}
+        >
           {/* Day slugs along the top, with a tick each. */}
-          <div className="pointer-events-none absolute inset-x-14 top-2 h-4">
+          <div
+            className="pointer-events-none absolute top-2 h-4"
+            style={{ left: m.gutter, right: m.gutter }}
+          >
             {dayMarks.map((mark) => {
               const pct = items.length === 1 ? 0 : mark.index / (items.length - 1);
               return (
@@ -217,9 +232,15 @@ export function DumpVoteTimeline({
 
           <div
             ref={plotRef}
-            className="relative touch-none"
-            style={{ height: PLOT_H }}
+            /*
+             * A finger on the plot is scrolling the page, not setting the cut —
+             * a 290px-tall region that swallowed vertical scroll would make the
+             * whole floor feel broken. Touch drags the handle below instead.
+             */
+            className={cn("relative", touch ? "touch-pan-y" : "touch-none")}
+            style={{ height: m.plotH }}
             onPointerDown={(e) => {
+              if (e.pointerType !== "mouse") return;
               if ((e.target as HTMLElement).closest("[data-media-card]")) return;
               beginDrag(e.clientY, e.currentTarget, e.pointerId);
             }}
@@ -233,7 +254,10 @@ export function DumpVoteTimeline({
               style={{ bottom: `${linePct}%` }}
             />
 
-            <div className="pointer-events-none absolute inset-y-0 -left-11 flex w-9 flex-col justify-between py-1 text-right font-mono text-2xs uppercase tracking-label text-ink-400">
+            <div
+              className="pointer-events-none absolute inset-y-0 flex flex-col justify-between py-1 text-right font-mono text-2xs uppercase tracking-label text-ink-400"
+              style={{ left: -(m.gutter - 4), width: m.gutter - 8 }}
+            >
               <span>Kept</span>
               <span>Quiet</span>
             </div>
@@ -241,7 +265,10 @@ export function DumpVoteTimeline({
             {/* The cut line. */}
             <div
               className={cn(
-                "absolute inset-x-0 z-20 h-5 -translate-y-1/2 cursor-ns-resize",
+                // Tall enough for a fingertip on touch; a hairline is fine for
+                // a pointer, which can land on 5px.
+                "absolute inset-x-0 z-20 -translate-y-1/2 cursor-ns-resize touch-none",
+                touch ? "h-11" : "h-5",
                 dragging && "z-30",
               )}
               style={{ bottom: `${linePct}%` }}
@@ -251,6 +278,7 @@ export function DumpVoteTimeline({
               }}
               onPointerMove={(e) => moveDrag(e.clientY)}
               onPointerUp={(e) => endDrag(e.clientY)}
+              onPointerCancel={(e) => endDrag(e.clientY)}
             >
               <div
                 className={cn(
@@ -258,7 +286,10 @@ export function DumpVoteTimeline({
                   dragging ? "border-t-2" : "border-dashed",
                 )}
               />
-              <div className="absolute -left-14 top-1/2 flex -translate-y-1/2 items-center bg-signal-600 px-1.5 py-0.5 font-mono text-2xs uppercase tracking-label text-paper-50">
+              <div
+                className="absolute top-1/2 flex -translate-y-1/2 items-center bg-signal-600 px-1.5 py-0.5 font-mono text-2xs uppercase tracking-label text-paper-50"
+                style={{ left: -m.gutter }}
+              >
                 Cut
               </div>
               <div
@@ -274,9 +305,9 @@ export function DumpVoteTimeline({
             {items.map((item, index) => {
               const pct = items.length === 1 ? 0 : index / (items.length - 1);
               const yRatio = item.reactions.rank / maxRank;
-              const cardH = MIN_CARD_H + yRatio * (MAX_CARD_H - MIN_CARD_H);
+              const cardH = m.minCardH + yRatio * (m.maxCardH - m.minCardH);
               const above = isInCut(item.cutOverride, item.reactions.rank, threshold);
-              const maxBottom = PLOT_H - cardH;
+              const maxBottom = m.plotH - cardH;
               const bottom = yRatio * maxBottom;
 
               return (
@@ -285,9 +316,9 @@ export function DumpVoteTimeline({
                   data-media-card
                   className="absolute z-10 transition-[bottom,height] duration-500 ease-out hover:z-30"
                   style={{
-                    left: `calc(${pct * 100}% - ${CARD_W / 2}px)`,
+                    left: `calc(${pct * 100}% - ${m.cardW / 2}px)`,
                     bottom,
-                    width: CARD_W,
+                    width: m.cardW,
                     height: cardH,
                   }}
                 >

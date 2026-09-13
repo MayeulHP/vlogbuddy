@@ -100,15 +100,19 @@ export function RenderView({
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <a href={publishedRender.downloadUrl} className="btn-signal" download>
+              <a
+                href={publishedRender.downloadUrl}
+                className="btn-signal w-full sm:w-auto"
+                download
+              >
                 ↓ Download MP4
               </a>
               {isCreator && (
-                <button onClick={reopen} className="btn-outline-dark">
+                <button onClick={reopen} className="btn-outline-dark w-full sm:w-auto">
                   Reopen the bench
                 </button>
               )}
-              <span className="ml-auto font-mono text-2xs uppercase tracking-label text-ink-500">
+              <span className="font-mono text-2xs uppercase tracking-label text-ink-500 sm:ml-auto">
                 Anyone with the link can watch it
               </span>
             </div>
@@ -163,14 +167,14 @@ export function RenderView({
 
   // ---------- in the lab ----------
   return (
-    <div className="mx-auto max-w-xl py-8 text-center">
+    <div className="mx-auto max-w-xl py-6 text-center sm:py-8">
       <p className="eyebrow-light">Beat 06 · Final cut</p>
       <h2 className="headline-xl mt-2 text-[clamp(1.8rem,5vw,2.8rem)] text-paper-50">
         {status === "queued" ? "Waiting for the lab" : "Printing the film"}
       </h2>
 
       {/* Academy leader: a countdown that means "something is happening". */}
-      <div className="relative mx-auto mt-8 h-44 w-44">
+      <div className="relative mx-auto mt-7 h-36 w-36 sm:mt-8 sm:h-44 sm:w-44">
         <div aria-hidden className="absolute inset-0 rounded-full border border-paper-100/20" />
         <div aria-hidden className="absolute inset-[14%] rounded-full border border-paper-100/10" />
         <div
@@ -214,7 +218,7 @@ export function RenderView({
 
       <div
         className={cn(
-          "mx-auto mt-5 h-[3px] w-56 bg-ink-800",
+          "mx-auto mt-5 h-[3px] w-full max-w-[14rem] bg-ink-800",
           status === "queued" && "animate-pulse-dot",
         )}
       >

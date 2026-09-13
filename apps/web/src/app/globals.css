@@ -21,12 +21,32 @@
 
 html {
   -webkit-tap-highlight-color: transparent;
+  /* Landscape on iOS otherwise inflates every size it feels like inflating. */
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   @apply bg-paper-100 font-sans text-ink-900 antialiased;
   min-height: 100vh;
+  /* Dynamic viewport: the address bar sliding away shouldn't leave a gap. */
+  min-height: 100dvh;
   font-feature-settings: "ss01";
+}
+
+/*
+ * Phone rules.
+ *
+ * Everything here keys off `pointer: coarse` rather than a width, because the
+ * thing that actually changes is the instrument: a fingertip needs ~44px and a
+ * mouse pointer doesn't, and a small window on a laptop is still a mouse.
+ */
+@media (pointer: coarse) {
+  /* iOS zooms the whole page when you focus an input under 16px. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 ::selection {
@@ -196,6 +216,9 @@ body {
            uppercase tracking-label transition-all duration-150
            disabled:cursor-not-allowed disabled:opacity-40;
     padding: 0.45rem 0.85rem;
+    min-height: 34px;
+    /* Stops the double-tap-to-zoom delay swallowing the first tap. */
+    touch-action: manipulation;
   }
   .btn-signal {
     @apply btn border-signal-600 bg-signal-600 text-paper-50
@@ -303,6 +326,18 @@ body {
     @apply bg-ink-700;
   }
 
+  /*
+   * The three grease-pencil marks. They sit on media, so they can never be a
+   * full 44px square on a contact-sheet frame — but a fingertip still needs
+   * more than the 18px a mouse is happy with.
+   */
+  .mark-sm {
+    @apply px-1.5 py-[3px] text-[9px];
+  }
+  .mark-md {
+    @apply px-2 py-1 text-[11px];
+  }
+
   /* Checkboxes keep the square language. */
   .check {
     @apply h-3.5 w-3.5 shrink-0 cursor-pointer appearance-none border border-[color:var(--hair-strong)] bg-transparent
@@ -352,4 +387,110 @@ body {
 /* Media on paper gets a hair of warmth so photos sit in the palette. */
 .print-tone {
   filter: saturate(0.92) contrast(1.04);
+}
+
+/*
+ * Touch sizing.
+ *
+ * The design is built out of hairlines and 11px mono labels, which is right on
+ * a desk and unusable with a thumb. Rather than a second set of components for
+ * phones, the same parts grow when the pointer is coarse.
+ */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+    padding: 0.6rem 1rem;
+  }
+  .field,
+  .field-dark {
+    min-height: 44px;
+  }
+  .check {
+    @apply h-5 w-5;
+  }
+  .mark-sm {
+    min-height: 30px;
+    min-width: 34px;
+    @apply px-2 text-[11px];
+  }
+  .mark-md {
+    min-height: 44px;
+    min-width: 46px;
+    @apply text-[15px];
+  }
+  .check:checked::after {
+    margin-top: 0;
+    font-size: 14px;
+    line-height: 1.35;
+  }
+  /* A grease-pencil line is a hard thing to catch with a fingertip. */
+  .slider {
+    height: 5px;
+  }
+  .slider::-webkit-slider-thumb {
+    height: 26px;
+    width: 16px;
+  }
+  .slider::-moz-range-thumb {
+    height: 26px;
+    width: 16px;
+  }
+  /* Native scrollbars are overlays on touch; the gutter is wasted space. */
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 0;
+    width: 0;
+  }
+}
+
+@layer utilities {
+  /*
+   * Safe areas. `viewport-fit=cover` lets the page paint under the notch and
+   * the home indicator, which is what makes an installed ROLLCALL look like an
+   * app rather than a web page in a box — every fixed edge pays it back here.
+   */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .px-safe {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  /*
+   * Clearance for the bottom tab bar, so the last block on a page isn't hiding
+   * behind it. Scoped to the widths where that bar exists — above `md` it is
+   * gone and this must not fight the page's own padding.
+   */
+  @media (max-width: 767px) {
+    .pb-rail {
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 5rem);
+    }
+  }
+  /* Momentum scrolling for the strips, without a rubber-banding page. */
+  .touch-scroll-x {
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Horizontal strips that should snap to whole frames on a phone. */
+  .snap-strip {
+    scroll-snap-type: x proximity;
+  }
+  .snap-frame {
+    scroll-snap-align: start;
+  }
+  /* Anything a finger drags rather than scrolls. */
+  .no-touch-pan {
+    touch-action: none;
+  }
+  /*
+   * Controls that only appear on hover — a card's delete cross, say. There is
+   * no hover on a phone, so they're simply always there.
+   */
+  @media (pointer: coarse) {
+    .touch-visible {
+      opacity: 1;
+    }
+  }
 }

@@ -31,21 +31,25 @@ export function Lightbox({
 
   const src = item.kind === "video" ? item.proxyUrl ?? item.originalUrl : item.originalUrl;
 
+  // The scrim is `/95`, not `/97`: 97 isn't a step on Tailwind's opacity scale,
+  // so it compiled to no background at all and the lightbox was see-through.
   return (
-    <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950/97" onClick={onClose}>
-      <header className="flex items-end justify-between gap-4 border-b border-[color:var(--hair-dark)] px-4 py-3 sm:px-6">
-        <div className="min-w-0">
-          <p className="eyebrow-light">
-            {item.uploaderName ? `Shot by ${item.uploaderName}` : "Unattributed"}
-            {item.kind === "video" && ` · ${formatDuration(item.durationSeconds)}`}
-          </p>
-          <p className="timecode mt-0.5 truncate text-sm text-paper-100">
-            {item.originalFilename}
-          </p>
+    <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950/95" onClick={onClose}>
+      <header className="pt-safe px-safe border-b border-[color:var(--hair-dark)]">
+        <div className="flex items-end justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="min-w-0">
+            <p className="eyebrow-light">
+              {item.uploaderName ? `Shot by ${item.uploaderName}` : "Unattributed"}
+              {item.kind === "video" && ` · ${formatDuration(item.durationSeconds)}`}
+            </p>
+            <p className="timecode mt-0.5 truncate text-sm text-paper-100">
+              {item.originalFilename}
+            </p>
+          </div>
+          <button onClick={onClose} className="btn-outline-dark shrink-0" aria-label="Close">
+            Close
+          </button>
         </div>
-        <button onClick={onClose} className="btn-outline-dark shrink-0" aria-label="Close">
-          Close
-        </button>
       </header>
 
       <div
@@ -69,10 +73,10 @@ export function Lightbox({
       </div>
 
       <footer
-        className="flex justify-center border-t border-[color:var(--hair-dark)] px-4 py-4"
+        className="pb-safe px-safe border-t border-[color:var(--hair-dark)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 px-4 py-4">
           <span className="eyebrow-light">Your mark</span>
           <ReactionBar
             slug={slug}

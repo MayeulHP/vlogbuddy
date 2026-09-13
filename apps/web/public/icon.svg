@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="ROLLCALL">
+  <!--
+    The app mark: one film frame, one red dot — the same reel-as-the-O idea the
+    wordmark uses. Everything sits inside the central 80% so the maskable
+    variant survives a circle crop on Android.
+  -->
+  <rect width="512" height="512" fill="#111315"/>
+  <g fill="#F0F0EC">
+    <rect x="112" y="178" width="22" height="22"/>
+    <rect x="112" y="245" width="22" height="22"/>
+    <rect x="112" y="312" width="22" height="22"/>
+    <rect x="378" y="178" width="22" height="22"/>
+    <rect x="378" y="245" width="22" height="22"/>
+    <rect x="378" y="312" width="22" height="22"/>
+    <rect x="150" y="160" width="212" height="192"/>
+  </g>
+  <circle cx="256" cy="256" r="58" fill="none" stroke="#AE1228" stroke-width="26"/>
+  <circle cx="256" cy="256" r="13" fill="#AE1228"/>
+</svg>

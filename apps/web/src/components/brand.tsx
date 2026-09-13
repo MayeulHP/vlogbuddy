@@ -95,7 +95,11 @@ export function SectionHead({
           </p>
         )}
       </div>
-      {right && <div className="shrink-0">{right}</div>}
+      {/*
+        On a phone the right-hand readings sit under the title on their own
+        line rather than being squeezed beside it — there is no beside.
+      */}
+      {right && <div className="w-full shrink-0 sm:w-auto">{right}</div>}
     </div>
   );
 }
