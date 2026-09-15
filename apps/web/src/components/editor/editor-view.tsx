@@ -30,7 +30,7 @@ import { ClipInspector } from "./clip-inspector";
 import { LayerInspector } from "./layer-inspector";
 import { AudioInspector, type SoundState } from "./audio-inspector";
 import { LayerPicker, SoundPicker, BedSettings } from "./stack-panels";
-import { DirectorPanel } from "./director-panel";
+import { DirectorPanel, DirectorRecut } from "./director-panel";
 import { FormatPanel } from "./format-panel";
 import { PileDrawer } from "./pile-drawer";
 import { ADD_KINDS, TimelineTracks, audioTrackLabel, type AddKind } from "./timeline-tracks";
@@ -103,18 +103,13 @@ export function EditorView({
    */
   const [sheetOpen, setSheetOpen] = useState(false);
   /**
-   * The settings that belong to the film rather than to a shot. On a phone they
-   * are the fourth thing on the tool row and arrive as a sheet like everything
-   * else; on a desk they're the side column's Film tab.
+   * The settings that belong to the film rather than to a shot. A sheet at
+   * every width — the ⚙ on the phone's tool row and the ⚙ on the desk toolbar
+   * open the same thing — because these are a handful of decisions you settle
+   * once, and a tab is a thing you're meant to keep coming back to.
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [playheadTime, setPlayheadTime] = useState(0);
-  /**
-   * Which panel the side column is showing. A tab strip rather than a stack of
-   * folds: the inspector has to keep the same place on screen when you pick a
-   * shot, and anything that opens above it moves it.
-   */
-  const [panel, setPanel] = useState<PanelId>("inspector");
   /**
    * Which add-picker is open, if any. It lives here rather than on the strip
    * because the same three pickers are a popover anchored to their button on
@@ -337,11 +332,11 @@ export function EditorView({
     return null;
   }, [selection, timeline]);
 
+  // The side column is the inspector and nothing else now, so picking something
+  // has nowhere to switch to — it just shows up.
   const choose = useCallback((next: Selection) => {
     setSelection(next);
     setSheetOpen(next.kind !== "none");
-    // Picking something is a request to look at it, whichever panel was up.
-    if (next.kind !== "none") setPanel("inspector");
   }, []);
 
   /**
@@ -531,15 +526,6 @@ export function EditorView({
       </div>
     );
 
-  const sheetTitle =
-    selection.kind === "clip"
-      ? "The shot"
-      : selection.kind === "layer"
-        ? "The layer"
-        : selection.kind === "audio"
-          ? "The track"
-          : "Inspector";
-
   /** What's sitting out of the film — the number on the Pile tab. */
   const clipMediaIds = useMemo(
     () => new Set(timeline.clips.map((c) => c.mediaItemId)),
@@ -606,42 +592,50 @@ export function EditorView({
   );
 
   /**
-   * The inspector's tab is named after what's selected, so the column says what
-   * it's about to show you rather than what kind of thing it is. On a phone the
-   * inspector is the sheet instead, so it isn't offered here at all.
-   *
-   * Two tabs. Pile, Layers and Mix were all lists of things the strip already
-   * draws, reached from a column instead of from the lanes they describe —
-   * they're the "+ Shot / + Layer / + Sound" buttons on the strip toolbar now.
-   * What's left is the thing you're working on, and the handful of settings
-   * the whole crew shares.
+   * What the side column is about, in words that don't move. The label used to
+   * be a tab that renamed itself Shot / Layer / Track / Nothing, so the same
+   * place on screen read as four different things; the column only ever holds
+   * the inspector now, so it can say so once and put what's selected after it.
    */
-  const tabs: { id: PanelId; label: string; count?: number }[] = [
-    ...(asSheet ? [] : [{ id: "inspector" as const, label: inspectorLabel(selection) }]),
-    { id: "film", label: "Film", count: undefined },
-  ];
-
-  const activePanel = tabs.some((t) => t.id === panel) ? panel : "film";
+  const selectedLine =
+    selection.kind === "clip" && selectedClip
+      ? `Shot ${String(timeline.clips.findIndex((c) => c.id === selectedClip.id) + 1).padStart(2, "0")} of ${timeline.clips.length}`
+      : selection.kind === "layer" && selected && "layer" in selected
+        ? `Layer ${selected.layer}`
+        : selection.kind === "audio" && selected && "role" in selected
+          ? selected.role === "bed"
+            ? "Music"
+            : "Sound"
+          : "Nothing yet";
 
   /**
-   * How the film plays and what shape it plays in, stacked in the order you'd
-   * settle them. Both are the whole crew's: printing is the creator's alone,
-   * but what the film looks like isn't.
+   * The film's own settings, in the order you'd settle them: what shape it is,
+   * how it plays, what's underneath it — then the one button that throws the
+   * cut away, pinned to the footer rather than sitting in the middle of the
+   * list.
    *
-   * Written once and shown twice — the side column's Film tab on a desk, the
-   * ⚙ sheet on a phone — because two copies of a settings panel is two
-   * copies to forget to change.
+   * Written once and opened from two ⚙s, the phone's tool row and the desk
+   * toolbar, because two copies of a settings panel is two copies to forget to
+   * change.
    */
   const filmSettings = (
     <>
-      <DirectorPanel
+      <FormatPanel
         slug={slug}
-        timeline={timeline}
-        mediaById={mediaById}
-        beat={beat}
+        format={format}
+        shortEdge={renderShortEdge}
+        layers={timeline.layers.length}
         locked={rendering}
-        bare
       />
+      <div className="border-t border-[color:var(--hair-dark)]">
+        <DirectorPanel
+          slug={slug}
+          timeline={timeline}
+          mediaById={mediaById}
+          beat={beat}
+          locked={rendering}
+        />
+      </div>
       {/* The bed is the crew's, not the cutter's — it comes off the vote on the
           floor — so it sits with the settings rather than with the verbs on the
           strip. */}
@@ -652,17 +646,6 @@ export function EditorView({
           media={media}
           onDispatch={dispatch}
           onChooseBedMusic={chooseBedMusic}
-        />
-      </div>
-      <div className="border-t border-[color:var(--hair-dark)]">
-        <FormatPanel
-          slug={slug}
-          format={format}
-          shortEdge={renderShortEdge}
-          fitPolicy={timeline.director.fitPolicy}
-          layers={timeline.layers.length}
-          locked={rendering}
-          bare
         />
       </div>
     </>
@@ -751,6 +734,21 @@ export function EditorView({
         <span className="mx-1.5 text-ink-500">·</span>
         {timeline.clips.length} shot{timeline.clips.length === 1 ? "" : "s"}
       </span>
+      {/* The film's settings, next to the numbers they change and a step short
+          of the one button that prints. A sheet rather than a tab in the side
+          column: shape, pace and score are settled once, and the column is
+          needed for the shot you're actually cutting. The phone has the same
+          button on its own row under the picture. */}
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        aria-expanded={settingsOpen}
+        title="Film settings"
+        className="btn-quiet-dark hidden shrink-0 md:inline-flex"
+      >
+        <span aria-hidden>⚙</span>
+        <span className="ml-1.5 hidden lg:inline">Film settings</span>
+      </button>
       {/* The same trigger sits at the foot of the rough cut on the floor;
           the director's panel locks while the film is on its way. */}
       {isCreator && (
@@ -873,54 +871,31 @@ export function EditorView({
         </div>
 
         {/*
-          The side column, as tabs rather than a stack of folds. The inspector
-          is the one panel that has to hold still — you pick a shot on the strip
-          and read it here — so nothing is allowed to open above it and shove it
-          down the page. Everything else takes its turn in the same box, and
-          picking anything brings the inspector straight back.
+          The side column is the inspector, full stop. It used to be a tab strip
+          whose first tab renamed itself after the selection and whose last one
+          held the film's settings — a navigation the size of the smallest type
+          on the page, in front of one panel anybody actually reads. The
+          settings are a sheet now and nothing else takes turns in this box, so
+          what's left is a header that says what you're looking at and the thing
+          itself.
         */}
-        {/* Below `md` this column doesn't exist: the inspector is the sheet and
-            the Film tab is the ⚙ on the tool row, so a stacked copy of it here
-            would be the screen-and-a-half of scroll the sheet was built to
-            replace. */}
+        {/* Below `md` this column doesn't exist: the inspector is the sheet, so
+            a stacked copy here would be the screen-and-a-half of scroll the
+            sheet was built to replace. */}
         <aside className="hidden min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-850 md:flex md:overflow-hidden">
-          <div
-            role="tablist"
-            aria-label="Bench panels"
-            className="flex shrink-0 items-stretch border-b border-[color:var(--hair-dark)]"
-          >
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                role="tab"
-                type="button"
-                aria-selected={activePanel === t.id}
-                onClick={() => setPanel(t.id)}
-                className={cn(
-                  // Equal shares of the column rather than natural widths, so
-                  // the row ends exactly where the column does at any size and
-                  // nothing can hide past the edge. 40px tall for a thumb.
-                  "flex min-h-[42px] min-w-0 flex-1 items-center justify-center gap-1 border-r border-[color:var(--hair-dark)] px-0.5 py-2 font-mono text-2xs uppercase tracking-label transition-colors last:border-r-0",
-                  activePanel === t.id
-                    ? "bg-paper-100 text-ink-900"
-                    : "text-ink-400 hover:bg-ink-800 hover:text-paper-100",
-                )}
-              >
-                <span className="truncate">{t.label}</span>
-                {t.count !== undefined && t.count > 0 && (
-                  <span className="shrink-0 tabular-nums opacity-60">{t.count}</span>
-                )}
-              </button>
-            ))}
+          <div className="flex min-h-[40px] shrink-0 items-center gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2">
+            <span className="eyebrow-light shrink-0 text-xs">Selected</span>
+            <span aria-hidden className="text-ink-600">
+              ·
+            </span>
+            <span className="timecode min-w-0 flex-1 truncate text-xs text-paper-100">
+              {selectedLine}
+            </span>
           </div>
 
           <div className="scrollbar-thin scrollbar-dark min-h-0 flex-1 md:overflow-y-auto">
             {/* On a phone this same inspector arrives as a sheet instead. */}
-            {activePanel === "inspector" && inspector}
-
-            {/* The same settings the ⚙ on the phone's tool row opens — one
-                definition, two places to reach it. */}
-            {activePanel === "film" && filmSettings}
+            {inspector}
           </div>
         </aside>
       </div>
@@ -933,7 +908,7 @@ export function EditorView({
       */}
       {asSheet && sheetOpen && selection.kind !== "none" && (
         <BenchSheet
-          title={sheetTitle}
+          title={selectedLine}
           onClose={() => setSheetOpen(false)}
           footer={
             dropLabel && (
@@ -964,8 +939,16 @@ export function EditorView({
         </BenchSheet>
       )}
 
-      {asSheet && settingsOpen && (
-        <BenchSheet title="Film settings" onClose={() => setSettingsOpen(false)}>
+      {/* The one sheet that exists at every width: on a phone it comes up from
+          the bottom like the rest, on a desk it slides over the side column at
+          the column's own width, so the picture and the strip never move. */}
+      {settingsOpen && (
+        <BenchSheet
+          title="Film settings"
+          onClose={() => setSettingsOpen(false)}
+          side
+          footer={<DirectorRecut slug={slug} timeline={timeline} locked={rendering} />}
+        >
           {filmSettings}
         </BenchSheet>
       )}
@@ -992,12 +975,19 @@ function BenchSheet({
   title,
   onClose,
   footer,
+  side = false,
   children,
 }: {
   title: string;
   onClose: () => void;
   /** The one action the sheet is for, pinned where a thumb already is. */
   footer?: React.ReactNode;
+  /**
+   * Also exists on a desk, anchored to the right edge at the side column's
+   * width. Everything else here is a phone-only stand-in for the column, so
+   * `md:hidden` is the default.
+   */
+  side?: boolean;
   children: React.ReactNode;
 }) {
   // Escape, the scroll lock and putting focus back on the strip all come from
@@ -1005,14 +995,35 @@ function BenchSheet({
   const ref = useDialog<HTMLDivElement>(onClose);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 md:hidden">
+    <div
+      className={cn(
+        "fixed inset-x-0 bottom-0 z-50",
+        side
+          ? "md:inset-y-0 md:left-auto md:right-0 md:bottom-0 md:w-[300px] xl:w-[320px]"
+          : "md:hidden",
+      )}
+    >
+      {/* Clicking off it is the same "I'm done" as Escape — but only where the
+          sheet is a panel beside the work, not over it. */}
+      {side && (
+        <button
+          type="button"
+          aria-hidden
+          tabIndex={-1}
+          onClick={onClose}
+          className="fixed inset-0 -z-10 hidden cursor-default bg-ink-900/40 md:block"
+        />
+      )}
       <div
         ref={ref}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="pb-safe flex max-h-[72dvh] animate-slide-up flex-col border-t border-[color:var(--hair-dark)] bg-ink-900 shadow-deck focus:outline-none"
+        className={cn(
+          "pb-safe flex max-h-[72dvh] animate-slide-up flex-col border-t border-[color:var(--hair-dark)] bg-ink-900 shadow-deck focus:outline-none",
+          side && "md:h-full md:max-h-none md:border-l md:border-t-0",
+        )}
       >
         <div className="flex shrink-0 items-center gap-3 border-b border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
           <span aria-hidden className="h-1 w-8 shrink-0 bg-ink-600" />
@@ -1068,18 +1079,3 @@ function soundStateFor(
 }
 
 
-/** The panels the side column can show — one at a time, same box. */
-type PanelId = "inspector" | "film";
-
-/** What the inspector is currently about, as a tab can say it. */
-function inspectorLabel(selection: Selection): string {
-  return selection.kind === "clip"
-    ? "Shot"
-    : selection.kind === "layer"
-      ? "Layer"
-      : selection.kind === "audio"
-        ? "Track"
-        : // Short on purpose: the strip divides the column evenly, so the
-          // longest label sets how narrow every tab has to survive.
-          "Nothing";
-}

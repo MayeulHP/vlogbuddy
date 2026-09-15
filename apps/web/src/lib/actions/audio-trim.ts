@@ -160,7 +160,7 @@ export async function setMusicTrimAction(
       .from(musicItems)
       .where(and(eq(musicItems.id, musicItemId), eq(musicItems.vlogId, session.vlog.id)))
       .limit(1);
-    if (!music) return { ok: false, error: "That track isn't on the floor any more" };
+    if (!music) return { ok: false, error: "That track isn't on the Trip page any more" };
 
     const result: TrimWrite = await db.transaction(async (tx): Promise<TrimWrite> => {
       const [current] = await tx

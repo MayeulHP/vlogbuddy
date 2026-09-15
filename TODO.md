@@ -255,11 +255,11 @@ Features that make it a complete tool:
       `+ Shot` / `+ Layer` / `+ Sound` buttons on the strip toolbar; each opens the
       existing picker as an anchored popover (desk) or bottom sheet (phone).
       Delete "Reel 02 · Strip". The lanes are the list — no panel duplicates them.
-- [ ] **Film settings is a sheet, not a tab.** (M) Move Director + Format (+ Duck)
+- [x] **Film settings is a sheet, not a tab.** (M) Move Director + Format (+ Duck)
       behind a ⚙ "Film settings" button. Order Shape → Pace → wrong-shape policy →
       toggles → Re-cut footer. Friends see Shape but its buttons are disabled with
       "Only <creator> can change the shape". Remove the duplicated fit blurb.
-- [ ] **Side column = inspector, full stop.** (M) One stable header ("Selected ·
+- [x] **Side column = inspector, full stop.** (M) One stable header ("Selected ·
       Shot 02 of 18"), no relabelling tab; ARIA tabs pattern only if any tab row
       survives (arrow keys, aria-controls, 12px labels, ≥40px tall). Selection no
       longer force-switches panels; the Pile picker shows its anchor ("after shot
@@ -271,7 +271,7 @@ Features that make it a complete tool:
 - [x] **Cut marker you can find.** (S) 24px on desk as on touch; hard cuts at ~50%
       opacity always, 100% on hover or when an adjacent shot is selected. Inspector
       Transition section shrinks to a one-line summary that focuses the marker.
-- [ ] **44px everywhere it's tapped.** (S) Transport Play 36/44; "Play this shot",
+- [x] **44px everywhere it's tapped.** (S) Transport Play 36/44; "Play this shot",
       −5s/+5s/Use all, Pile filter, Film checkboxes → `.btn`-derived classes so the
       touch media query applies; checkbox rows full-width ≥40px.
 - [x] **Compact masthead on Film** (desktop; the phone masthead is still ~110px). (M) One 48px row (wordmark · title · segmented
@@ -280,10 +280,12 @@ Features that make it a complete tool:
       and a 590px picture.
 - [x] **Shortcuts on the controls.** (S) kbd hint on Split (S), Take out (⌫), Undo
       (⌘Z) buttons; keep the "?" card as the index.
-- [ ] **One name per thing.** (S) "Trip" not "the floor"/"the Trip page"; "Music"
+- [x] **One name per thing.** (S) "Trip" not "the floor"/"the Trip page"; "Music"
       not "Bed"; "Sound n" not "Cue/Snd"; "Muted" not "Held out"; "marks" not
       "rank"; sheet titles = inspector header; tab counts use the rail's chip.
-- [ ] **Gutter labels by width.** (S) Icons at 52px, words at 74px, instead of
+- [x] **Gutter labels by width.** (S) Icons at 52px, words at 74px, instead of
       `Pic / L1 / Bed`.
-- [ ] Phone leftovers: collapse the masthead on Film below md; the clip
+- [x] Phone leftovers: collapse the masthead on Film below md; the clip
       inspector renders its own "Take this shot out" under the sheet's sticky one.
+- [ ] Menu audit residue: the 20px `?` blurb expanders in the settings sheet;
+      Undo/Redo are 42px wide on phones; the `?` pill is 20×44 under coarse pointer.

@@ -19,6 +19,42 @@ import { runDirectorAction } from "@/lib/actions/timeline";
 import { cn } from "@/lib/cn";
 
 /**
+ * A blurb that only costs a line when someone asks for it.
+ *
+ * The settings sheet is a column of decisions, and two lines of explanation
+ * under each one turns five decisions into a scroll. The sentence is still
+ * there — it just waits behind the mark next to the thing it explains.
+ */
+export function Blurb({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          // Some of these sit inside a <label>, where a plain click would tick
+          // the box it's explaining.
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        aria-expanded={open}
+        aria-label={`What ${label} does`}
+        title={`What ${label} does`}
+        className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded-full border border-[color:var(--hair-dark)] align-middle font-mono text-[10px] leading-none text-ink-400 transition-colors hover:border-ink-400 hover:text-paper-100"
+      >
+        ?
+      </button>
+      {open && (
+        <span className="mt-2 block text-2xs normal-case leading-relaxed tracking-normal text-ink-400">
+          {children}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * The auto-cut's controls.
  *
  * Deliberately not in `stack-panels.tsx`: that file exists to draw a line
@@ -27,6 +63,11 @@ import { cn } from "@/lib/cn";
  *
  * Everything here goes through a server action rather than the socket, because
  * changing the pace has to be followed by a re-sync and the two can't race.
+ *
+ * "Re-cut from scratch" used to live at the foot of this panel, which put a
+ * destructive control in the middle of the settings sheet. It's `DirectorRecut`
+ * below now, pinned to the sheet's footer where the one action that ends the
+ * errand belongs.
  */
 export function DirectorPanel({
   slug,
@@ -34,7 +75,6 @@ export function DirectorPanel({
   mediaById,
   beat,
   locked,
-  bare = false,
 }: {
   slug: string;
   timeline: TimelineDoc;
@@ -42,12 +82,9 @@ export function DirectorPanel({
   /** Whether there's a pulse to cut to, and the reason when there isn't. */
   beat: BeatStatus;
   locked: boolean;
-  /** Inside the bench accordion, the fold's own header is the panel's header. */
-  bare?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
 
   const director = timeline.director;
 
@@ -64,14 +101,12 @@ export function DirectorPanel({
     };
   });
   const scenes = detectScenes(cut);
-  const handCut = timeline.clips.filter((c) => c.auto.length === 0).length;
 
   function run(input: Parameters<typeof runDirectorAction>[1]) {
     setError(null);
     startTransition(async () => {
       const result = await runDirectorAction(slug, input);
       if (!result.ok) setError(result.error);
-      else setConfirming(false);
     });
   }
 
@@ -81,15 +116,9 @@ export function DirectorPanel({
       : "Every shot timed by the crew's marks.";
 
   return (
-    <section className={cn(!bare && "border border-[color:var(--hair-dark)] bg-ink-850")}>
+    <section>
       <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
-        {!bare && (
-          <>
-            <p className="eyebrow-light">Straight from the vote</p>
-            <h3 className="headline mt-0.5 text-xl text-paper-100">Auto-cut</h3>
-          </>
-        )}
-        <p className={cn("text-[13px] leading-relaxed text-ink-300", !bare && "mt-1")}>{blurb}</p>
+        <p className="text-[13px] leading-relaxed text-ink-300">{blurb}</p>
       </div>
 
       <div className="space-y-5 px-4 py-4">
@@ -121,12 +150,20 @@ export function DirectorPanel({
         {/*
           The default every shot of the wrong shape starts from, and open to
           anyone: you can already reframe any single shot from the inspector, so
-          gating the default would be a lock with the door open. The frame
-          itself, stacked directly below in this same tab, is open for exactly
-          the same reason. It rides on the same open action as the pace above.
+          gating the default would be a lock with the door open. The frame, at
+          the top of the same sheet, is open for exactly the same reason. It
+          rides on the same open action as the pace above. This is the only
+          place the policy is explained — the frame panel used to say it again
+          in different words.
         */}
         <div>
-          <p className="eyebrow-light mb-2">Shots of the wrong shape</p>
+          <p className="eyebrow-light mb-2">
+            Shots of the wrong shape
+            <Blurb label="the wrong-shape setting">
+              {FIT_BLURBS[director.fitPolicy]} Shots already pointing the right way are left
+              alone, and any one shot can be set its own way from the shot panel.
+            </Blurb>
+          </p>
           <div className="grid grid-cols-3 gap-1">
             {CLIP_FITS.map((option) => (
               <button
@@ -145,10 +182,6 @@ export function DirectorPanel({
               </button>
             ))}
           </div>
-          <p className="mt-2 text-2xs leading-relaxed text-ink-400">
-            {FIT_BLURBS[director.fitPolicy]} Shots already pointing the right way are left
-            alone, and any one shot can be set its own way from the shot panel.
-          </p>
         </div>
 
         <label className="flex cursor-pointer items-start gap-2.5">
@@ -189,18 +222,19 @@ export function DirectorPanel({
           <span>
             <span className={cn("block text-[13px]", beat.grid ? "text-paper-100" : "text-ink-400")}>
               Cut on the beat
-            </span>
-            <span className="block text-2xs leading-relaxed text-ink-400">
-              {beat.grid ? (
-                <>
-                  Nudges each cut onto the nearest beat of the music — {Math.round(beat.grid.bpm)}{" "}
-                  bpm, marked along the ruler. Shots keep the length the crew&rsquo;s marks bought
-                  them; only the exact moment moves.
-                </>
-              ) : (
-                beat.reason
+              {beat.grid && (
+                <Blurb label="cutting on the beat">
+                  Nudges each cut onto the nearest beat of the music —{" "}
+                  {Math.round(beat.grid.bpm)} bpm, marked along the ruler. Shots keep the length
+                  the crew&rsquo;s marks bought them; only the exact moment moves.
+                </Blurb>
               )}
             </span>
+            {/* When there's nothing to cut to, the reason isn't an aside — it's
+                why the box is flat, so it stays on screen. */}
+            {!beat.grid && (
+              <span className="block text-2xs leading-relaxed text-ink-400">{beat.reason}</span>
+            )}
           </span>
         </label>
 
@@ -220,55 +254,91 @@ export function DirectorPanel({
           </span>
         </label>
 
-        <div className="border-t border-[color:var(--hair-dark)] pt-4">
-          {confirming ? (
-            <div className="space-y-2">
-              <p className="text-[13px] leading-relaxed text-paper-100">
-                {handCut > 0
-                  ? `This puts all ${timeline.clips.length} shots back to the length the crew's marks suggest — including the ${handCut} ${handCut === 1 ? "you've" : "you've"} trimmed by hand. There's no undo.`
-                  : "This puts every shot back to the length the crew's marks suggest. There's no undo."}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => run({ recut: true })}
-                  className="flex-1 border border-rust-400 bg-rust-400 px-3 py-2 text-xs text-ink-900 disabled:opacity-50"
-                >
-                  {pending ? "Re-cutting…" : "Yes, start again"}
-                </button>
-                <button
-                  type="button"
-                  disabled={pending}
-                  onClick={() => setConfirming(false)}
-                  className="border border-[color:var(--hair-dark)] px-3 py-2 text-xs text-ink-300 hover:text-paper-100"
-                >
-                  Keep my cut
-                </button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <button
-                type="button"
-                disabled={locked || pending || timeline.clips.length === 0}
-                onClick={() => setConfirming(true)}
-                className="w-full border border-[color:var(--hair-dark)] px-3 py-2 text-xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-50"
-              >
-                Re-cut from scratch
-              </button>
-              {handCut > 0 && (
-                <p className="mt-2 text-2xs leading-relaxed text-ink-400">
-                  {handCut} {handCut === 1 ? "shot is" : "shots are"} cut by hand — the auto-cut
-                  leaves {handCut === 1 ? "it" : "them"} alone.
-                </p>
-              )}
-            </>
-          )}
-        </div>
-
         {error && <p className="text-2xs text-rust-400">{error}</p>}
       </div>
     </section>
+  );
+}
+
+/**
+ * "Start again", on its own.
+ *
+ * It's the settings sheet's footer rather than a row in the middle of it: the
+ * one control here that throws work away shouldn't be something you scroll
+ * past on the way to the pace buttons, and a sticky footer is where the action
+ * that ends an errand already lives on this bench.
+ */
+export function DirectorRecut({
+  slug,
+  timeline,
+  locked,
+}: {
+  slug: string;
+  timeline: TimelineDoc;
+  locked: boolean;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const handCut = timeline.clips.filter((c) => c.auto.length === 0).length;
+
+  function recut() {
+    setError(null);
+    startTransition(async () => {
+      const result = await runDirectorAction(slug, { recut: true });
+      if (!result.ok) setError(result.error);
+      else setConfirming(false);
+    });
+  }
+
+  return (
+    <div>
+      {confirming ? (
+        <div className="space-y-2">
+          <p className="text-[13px] leading-relaxed text-paper-100">
+            {handCut > 0
+              ? `This puts all ${timeline.clips.length} shots back to the length the crew's marks suggest — including the ${handCut} ${handCut === 1 ? "you've" : "you've"} trimmed by hand. There's no undo.`
+              : "This puts every shot back to the length the crew's marks suggest. There's no undo."}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={recut}
+              className="flex-1 border border-rust-400 bg-rust-400 px-3 py-2 text-xs text-ink-900 disabled:opacity-50"
+            >
+              {pending ? "Re-cutting…" : "Yes, start again"}
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => setConfirming(false)}
+              className="border border-[color:var(--hair-dark)] px-3 py-2 text-xs text-ink-300 hover:text-paper-100"
+            >
+              Keep my cut
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <button
+            type="button"
+            disabled={locked || pending || timeline.clips.length === 0}
+            onClick={() => setConfirming(true)}
+            className="w-full border border-[color:var(--hair-dark)] px-3 py-2 text-xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-50"
+          >
+            Re-cut from scratch
+          </button>
+          {handCut > 0 && (
+            <p className="mt-2 text-2xs leading-relaxed text-ink-400">
+              {handCut} {handCut === 1 ? "shot is" : "shots are"} cut by hand — the auto-cut
+              leaves {handCut === 1 ? "it" : "them"} alone.
+            </p>
+          )}
+        </>
+      )}
+      {error && <p className="mt-2 text-2xs text-rust-400">{error}</p>}
+    </div>
   );
 }

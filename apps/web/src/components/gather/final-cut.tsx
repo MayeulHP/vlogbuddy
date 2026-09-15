@@ -171,8 +171,8 @@ export function FinalCut({
         size="sm"
         note={
           touch
-            ? "Assembled from the crew's marks, live. Use the arrows to move a shot, ✕ to drop it, or pull one back off the floor."
-            : "Assembled from the crew's marks, live. Drag to reorder, ✕ to drop a shot, or pull one back off the floor."
+            ? "Assembled from the crew's marks, live. Use the arrows to move a shot, ✕ to drop it, or pull a left-out one back in."
+            : "Assembled from the crew's marks, live. Drag to reorder, ✕ to drop a shot, or pull a left-out one back in."
         }
         right={
           <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:gap-3">
@@ -348,7 +348,7 @@ export function FinalCut({
                   )}
                 >
                   <span className="text-sm">{trayOpen ? "▾" : "＋"}</span>
-                  The floor
+                  Left out
                   <span className="text-ink-400">{leftOut.length} left</span>
                 </button>
               )}
@@ -376,7 +376,7 @@ export function FinalCut({
                 </button>
               </>
             ) : bedTrack?.mediaItemId ? (
-              <span className="text-xs text-ink-300">An uploaded audio file is the bed.</span>
+              <span className="text-xs text-ink-300">An uploaded audio file is the music.</span>
             ) : (
               <span className="font-mono text-2xs uppercase tracking-label text-ink-400">
                 {music.length > 0
@@ -386,7 +386,7 @@ export function FinalCut({
             )}
             {extraCues > 0 && (
               <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-400">
-                +{extraCues} cue{extraCues === 1 ? "" : "s"} on the bench
+                +{extraCues} sound{extraCues === 1 ? "" : "s"} on the Film page
               </span>
             )}
           </div>
@@ -394,7 +394,7 @@ export function FinalCut({
           {trayOpen && leftOut.length > 0 && (
             <div className="border-t border-[color:var(--hair-dark)] bg-ink-950 px-3 py-3">
               <p className="eyebrow-light mb-2">
-                Left on the floor by the votes — tap one to force it back in
+                Left out by the votes — tap one to force it back in
               </p>
               <div className="scrollbar-thin scrollbar-dark flex max-h-44 flex-wrap gap-1 overflow-y-auto">
                 {leftOut.map((item) => (

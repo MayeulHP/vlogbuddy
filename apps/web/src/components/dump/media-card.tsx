@@ -172,10 +172,10 @@ export function MediaCard({
             The least-marked frames on the light table are also the smallest —
             58px tall on a phone — and that is not enough room for a question
             and two buttons. So the question is the part allowed to shrink away:
-            the buttons say "Pull" and "Keep" on their own.
+            the buttons say "Take out" and "Keep" on their own.
           */}
           <p className="min-h-0 shrink overflow-hidden font-mono text-2xs uppercase leading-tight tracking-label text-paper-200">
-            Pull this frame?
+            Take this out?
           </p>
           <div className="flex shrink-0 flex-wrap items-center justify-center gap-1">
             <button
@@ -184,7 +184,7 @@ export function MediaCard({
               className="flex min-h-[32px] min-w-[44px] items-center justify-center bg-signal-600 px-2 font-mono text-2xs uppercase tracking-label text-paper-50 transition-colors hover:bg-signal-700 disabled:opacity-60"
               autoFocus
             >
-              {deleting ? "…" : "Pull"}
+              {deleting ? "…" : "Take out"}
             </button>
             <button
               onClick={() => setArmed(false)}

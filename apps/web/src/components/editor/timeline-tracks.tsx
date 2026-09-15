@@ -63,17 +63,68 @@ const LANES = {
 } as const;
 
 /**
- * The lane names, twice over.
+ * The lane names, and what stands in for them at 52px.
  *
  * A 52px gutter can't hold "Picture" or "Layer 1", and a gutter wide enough to
  * would cost a fifth of a 375px strip — which is the footage, the part nobody
- * can get back. So the phone gets the short forms; the names are the same
- * words the inspector uses, cut down rather than renamed.
+ * can get back. The old answer was abbreviations, but `Pic / L1 / Bed` is three
+ * different truncation styles and none of them is a word anyone would say. A
+ * 16px glyph is smaller than any of them and doesn't pretend to be language:
+ * the full name rides along as `title` and `aria-label`, so the lane is still
+ * named for a screen reader and for anyone who hovers.
+ *
+ * The numbers stay as numbers — a stack of layers is only legible if you can
+ * tell L1 from L3 — so the layer glyph carries its digit.
  */
 const LANE_NAMES = {
-  desk: { picture: "Picture", layer: (n: number) => `Layer ${n}`, bed: "Music", cue: (n: number) => `Sound ${n}`, bpm: (b: number) => `${b} bpm` },
-  touch: { picture: "Pic", layer: (n: number) => `L${n}`, bed: "Music", cue: (n: number) => `S${n}`, bpm: (b: number) => `${b}` },
+  picture: "Picture",
+  layer: (n: number) => `Layer ${n}`,
+  bed: "Music",
+  cue: (n: number) => `Sound ${n}`,
+  bpm: (b: number) => `${b} bpm`,
 } as const;
+
+/** Monochrome, hairline-weight, 16px: the gutter's alphabet at 52px. */
+function LaneGlyph({ kind, n }: { kind: "picture" | "layer" | "audio"; n?: number }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: "0 0 16 16",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.2,
+    "aria-hidden": true,
+  } as const;
+  if (kind === "picture") {
+    // A frame with its perforations — the base track is the film itself.
+    return (
+      <svg {...common}>
+        <rect x="1.5" y="3.5" width="13" height="9" />
+        <path d="M4.5 3.5v9M11.5 3.5v9" />
+      </svg>
+    );
+  }
+  if (kind === "layer") {
+    // Two squares, offset: something sitting over something else.
+    return (
+      <span className="flex items-center gap-[3px]">
+        <svg {...common}>
+          <rect x="1.5" y="5.5" width="8" height="8" />
+          <path d="M5 5.5V2.5h8.5V11h-3" />
+        </svg>
+        {n !== undefined && <span className="tabular-nums">{n}</span>}
+      </span>
+    );
+  }
+  // A note, for the bed and the cues alike.
+  return (
+    <svg {...common}>
+      <path d="M6 12.5V4l7-1.5V11" />
+      <circle cx="4.25" cy="12.5" r="2.25" />
+      <circle cx="11.25" cy="11" r="2.25" />
+    </svg>
+  );
+}
 
 /**
  * The strip of the ruler the beats get when there's a pulse to draw. Bought
@@ -160,7 +211,9 @@ export function TimelineTracks({
 }) {
   const touch = useIsTouch();
   const lanes = touch ? LANES.touch : LANES.desk;
-  const names = touch ? LANE_NAMES.touch : LANE_NAMES.desk;
+  // At 52px the gutter speaks in glyphs; at 74px it has room for the words.
+  const glyphs = touch;
+  const names = LANE_NAMES;
   const [scale, setScale] = useState(28);
   const laneRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -601,7 +654,7 @@ export function TimelineTracks({
         </p>
         {onBackToGather && (
           <button onClick={onBackToGather} className="btn-outline-dark mt-4">
-            Back to the floor
+            Back to Trip
           </button>
         )}
       </div>
@@ -663,21 +716,21 @@ export function TimelineTracks({
           <div className="flex items-stretch border border-[color:var(--hair-dark)]">
             <button
               onClick={() => zoomBy(1 / 1.5)}
-              className="flex min-h-[34px] min-w-[34px] items-center justify-center px-2 font-mono text-[13px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
+              className="touch-square flex min-h-[34px] min-w-[34px] items-center justify-center px-2 font-mono text-[13px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
               aria-label="Zoom out"
             >
               −
             </button>
             <button
               onClick={() => zoomBy(1.5)}
-              className="flex min-h-[34px] min-w-[34px] items-center justify-center border-l border-[color:var(--hair-dark)] px-2 font-mono text-[13px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
+              className="touch-square flex min-h-[34px] min-w-[34px] items-center justify-center border-l border-[color:var(--hair-dark)] px-2 font-mono text-[13px] text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
               aria-label="Zoom in"
             >
               +
             </button>
             <button
               onClick={fitToWidth}
-              className="flex min-h-[34px] items-center justify-center border-l border-[color:var(--hair-dark)] px-2 font-mono text-2xs uppercase tracking-wide text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
+              className="touch-square flex min-h-[34px] items-center justify-center border-l border-[color:var(--hair-dark)] px-2 font-mono text-2xs uppercase tracking-wide text-ink-300 transition-colors hover:bg-ink-800 hover:text-paper-100"
               aria-label="Fit the whole film on screen"
               title="Fit the whole film on screen"
             >
@@ -700,7 +753,9 @@ export function TimelineTracks({
             className="flex items-end justify-end px-2 pb-0.5"
           >
             {beat.grid && (
-              <span className="eyebrow-light truncate">{names.bpm(Math.round(beat.grid.bpm))}</span>
+              <span className="eyebrow-light truncate" title={names.bpm(Math.round(beat.grid.bpm))}>
+                {glyphs ? Math.round(beat.grid.bpm) : names.bpm(Math.round(beat.grid.bpm))}
+              </span>
             )}
           </div>
           {layerLanes.map((n) => (
@@ -709,8 +764,8 @@ export function TimelineTracks({
               style={{ height: lanes.layer }}
               className="flex items-center border-t border-[color:var(--hair-dark)] px-2"
             >
-              <span className="eyebrow-light truncate" title={`Layer ${n}`}>
-                {names.layer(n)}
+              <span className="eyebrow-light truncate" title={names.layer(n)} aria-label={names.layer(n)}>
+                {glyphs ? <LaneGlyph kind="layer" n={n} /> : names.layer(n)}
               </span>
             </div>
           ))}
@@ -718,8 +773,8 @@ export function TimelineTracks({
             style={{ height: lanes.base }}
             className="flex items-center border-t border-[color:var(--hair-dark)] px-2"
           >
-            <span className="eyebrow-light" title="Picture">
-              {names.picture}
+            <span className="eyebrow-light" title={names.picture} aria-label={names.picture}>
+              {glyphs ? <LaneGlyph kind="picture" /> : names.picture}
             </span>
           </div>
           {timeline.audio.map((track, i) => (
@@ -730,9 +785,16 @@ export function TimelineTracks({
             >
               <span
                 className="eyebrow-light truncate"
-                title={track.role === "bed" ? "Music" : `Sound ${i + 1}`}
+                title={track.role === "bed" ? names.bed : names.cue(i + 1)}
+                aria-label={track.role === "bed" ? names.bed : names.cue(i + 1)}
               >
-                {track.role === "bed" ? names.bed : names.cue(i + 1)}
+                {glyphs ? (
+                  <LaneGlyph kind="audio" />
+                ) : track.role === "bed" ? (
+                  names.bed
+                ) : (
+                  names.cue(i + 1)
+                )}
               </span>
             </div>
           ))}

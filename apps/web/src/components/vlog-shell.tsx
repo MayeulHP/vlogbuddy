@@ -145,8 +145,11 @@ export function VlogShell(props: VlogShellProps) {
             and every pixel of preamble is a pixel of strip. So at md+ it
             collapses to one row — who we are, which film, which room, who else
             is here — and the slate line and the display rail stay on the Trip
-            page, where the counts are the point. Phones keep the tall masthead;
-            they get their rooms from the bottom bar either way.
+            page, where the counts are the point.
+
+            Phones get the same treatment, one branch down: the row below is
+            already title · presence · share, so Film only has to drop the slate
+            line under it. It stays sticky, and the rooms stay in the bottom bar.
           */}
           {fixed && (
             <div className="hidden min-h-[48px] items-center gap-3 md:flex">
@@ -183,7 +186,7 @@ export function VlogShell(props: VlogShellProps) {
           <div
             className={cn(
               "flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-2.5 sm:pt-3",
-              fixed && "md:hidden",
+              fixed && "pb-2.5 md:hidden md:pb-0",
             )}
           >
             <div className="flex min-w-0 flex-1 items-baseline gap-2 sm:gap-3">
@@ -206,7 +209,7 @@ export function VlogShell(props: VlogShellProps) {
           </div>
 
           {/* Slate line — the numbers, in mono, never shouting. */}
-          <div className={cn(fixed && "md:hidden", "scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0")}>
+          <div className={cn(fixed && "hidden", "scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0")}>
             {[
               `${media.length} clip${media.length === 1 ? "" : "s"}`,
               `${music.length} track${music.length === 1 ? "" : "s"}`,

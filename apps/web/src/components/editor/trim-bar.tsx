@@ -221,7 +221,7 @@ export function TrimBar({
               onPointerDown={(event) => grab(event, edge)}
               onKeyDown={(event) => nudge(event, edge)}
               style={{ left: pct(value) }}
-              className="absolute inset-y-0 flex w-8 -translate-x-1/2 cursor-ew-resize touch-none items-stretch justify-center focus:outline-none focus-visible:bg-signal-500/20"
+              className="trim-grip absolute inset-y-0 flex w-8 -translate-x-1/2 cursor-ew-resize touch-none items-stretch justify-center focus:outline-none focus-visible:bg-signal-500/20"
             >
               <span className="w-[3px] bg-signal-500" />
             </button>

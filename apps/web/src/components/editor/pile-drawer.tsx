@@ -96,7 +96,7 @@ export function PileDrawer({
               onClick={() => setKind(k)}
               aria-pressed={kind === k}
               className={cn(
-                "px-2 py-1 font-mono text-2xs uppercase tracking-label transition-colors",
+                "flex min-h-[32px] items-center px-2.5 font-mono text-2xs uppercase tracking-label transition-colors",
                 kind === k
                   ? "bg-paper-100 text-ink-900"
                   : "text-ink-400 hover:bg-ink-800 hover:text-paper-100",
@@ -123,8 +123,8 @@ export function PileDrawer({
 
       {available.length === 0 ? (
         <p className="px-4 py-4 text-[13px] leading-relaxed text-ink-400">
-          Everything that&apos;s ready is already in the film. Add more to the pile on the floor
-          and it&apos;ll show up here.
+          Everything that&apos;s ready is already in the film. Add more to the pile on the Trip
+          page and it&apos;ll show up here.
         </p>
       ) : rows.length === 0 ? (
         <p className="px-4 py-4 text-[13px] leading-relaxed text-ink-400">
@@ -151,7 +151,7 @@ export function PileDrawer({
                       : "Still"}
                     {" · "}
                     {item.reactions.count > 0
-                      ? `rank ${item.reactions.rank.toFixed(1)}`
+                      ? `${item.reactions.rank.toFixed(1)} marks`
                       : "no reactions yet"}
                   </p>
                 </div>

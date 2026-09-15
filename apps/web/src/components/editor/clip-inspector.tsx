@@ -34,6 +34,7 @@ import { KBD_HINT } from "./kbd";
 import { SliderField } from "./slider-field";
 import type { PreviewTransport } from "./preview-player";
 import { cn } from "@/lib/cn";
+import { useMediaQuery } from "@/hooks/use-media-query";
 
 /**
  * The speeds anyone actually asks for: half for the good bit, one for as shot,
@@ -77,6 +78,8 @@ export function ClipInspector({
   onSelectClip: (clipId: string) => void;
   onDispatch: (op: TimelineOp) => void;
 }) {
+  /** Matches editor-view's sheet breakpoint; see the footer note below. */
+  const inSheet = useMediaQuery("(max-width: 767px)");
   const sourceDuration = media?.durationSeconds ?? null;
   const effective = clipDuration(clip, sourceDuration);
 
@@ -291,7 +294,7 @@ export function ClipInspector({
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={toggleAudition}
-                      className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
+                      className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal"
                     >
                       {auditioning ? "❙❙ Stop" : "▶ Play this shot"}
                     </button>
@@ -326,21 +329,21 @@ export function ClipInspector({
                   <button
                     onClick={() => grow(-5)}
                     disabled={effective <= MIN_CLIP_SPAN}
-                    className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+                    className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal text-ink-300 hover:text-paper-100"
                   >
                     − 5s
                   </button>
                   <button
                     onClick={() => grow(5)}
                     disabled={trimmedAway < 0.1}
-                    className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+                    className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal text-ink-300 hover:text-paper-100"
                   >
                     + 5s
                   </button>
                   <button
                     onClick={() => patch({ trimStart: 0, trimEnd: sourceDuration })}
                     disabled={trimmedAway < 0.1}
-                    className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+                    className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal text-ink-300 hover:text-paper-100"
                   >
                     Use all {formatDuration(sourceDuration)}
                   </button>
@@ -483,7 +486,7 @@ export function ClipInspector({
                   onClick={() => patch({ fit: choice })}
                   title={FIT_BLURBS[choice]}
                   className={cn(
-                    "py-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                    "flex min-h-[34px] items-center justify-center px-1 font-mono text-2xs uppercase tracking-label transition-colors",
                     clip.fit === choice
                       ? "bg-signal-600 text-paper-50"
                       : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
@@ -527,7 +530,7 @@ export function ClipInspector({
                       key={chip}
                       onClick={() => patch({ speed: chip })}
                       className={cn(
-                        "py-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                        "flex min-h-[34px] items-center justify-center px-1 font-mono text-2xs uppercase tracking-label transition-colors",
                         clip.speed === chip
                           ? "bg-signal-600 text-paper-50"
                           : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
@@ -567,7 +570,7 @@ export function ClipInspector({
                   onClick={() => patch({ look: choice })}
                   title={LOOK_BLURBS[choice]}
                   className={cn(
-                    "py-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                    "flex min-h-[34px] items-center justify-center px-1 font-mono text-2xs uppercase tracking-label transition-colors",
                     clip.look === choice
                       ? "bg-signal-600 text-paper-50"
                       : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
@@ -824,19 +827,25 @@ export function ClipInspector({
           One verb for getting rid of something, in all three inspectors: you
           take it out. It sits outside the sections because it belongs to none
           of them — it's what you do instead of all of them.
+
+          Below `md` the inspector is a bottom sheet whose sticky footer already
+          carries this button, so showing it here too would offer the same verb
+          twice on the one screen with the least room for it.
         */}
-        <div className="border-t border-[color:var(--hair-dark)] pt-4">
-          <button
-            onClick={() => onDispatch({ type: "clip.remove", clipId: clip.id })}
-            className="btn border-signal-700/50 bg-signal-900/30 w-full text-signal-300 hover:border-signal-500 hover:bg-signal-900/60"
-          >
-            Take this shot out
-            <kbd className={KBD_HINT}>⌫</kbd>
-          </button>
-          <p className="mt-1 text-2xs text-ink-400">
-            Drops it from the cut. Nothing is deleted — bring it back from the Trip page.
-          </p>
-        </div>
+        {!inSheet && (
+          <div className="border-t border-[color:var(--hair-dark)] pt-4">
+            <button
+              onClick={() => onDispatch({ type: "clip.remove", clipId: clip.id })}
+              className="btn border-signal-700/50 bg-signal-900/30 w-full text-signal-300 hover:border-signal-500 hover:bg-signal-900/60"
+            >
+              Take this shot out
+              <kbd className={KBD_HINT}>⌫</kbd>
+            </button>
+            <p className="mt-1 text-2xs text-ink-400">
+              Drops it from the cut. Nothing is deleted — bring it back from Trip.
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );

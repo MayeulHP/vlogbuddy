@@ -182,7 +182,7 @@ export function LayerInspector({
                   key={n}
                   onClick={() => patch({ layer: n })}
                   className={cn(
-                    "py-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                    "flex min-h-[34px] items-center justify-center px-1 font-mono text-2xs uppercase tracking-label transition-colors",
                     layer.layer === n
                       ? "bg-signal-600 text-paper-50"
                       : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",

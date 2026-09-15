@@ -100,7 +100,7 @@ export function AudioTrim({
           type="button"
           onClick={() => onChange({ offset: 0, duration: null })}
           disabled={disabled || untouched}
-          className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+          className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal text-ink-300 hover:text-paper-100"
         >
           Use all {formatDuration(source)}
         </button>
@@ -197,7 +197,7 @@ function Stepper({
           onClick={() => onStep(delta)}
           disabled={disabled || (delta < 0 && value <= 0)}
           aria-label={`${label} ${delta > 0 ? "later" : "earlier"} by ${Math.abs(delta)} seconds`}
-          className="min-w-[34px] border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-ink-300 transition-colors hover:text-paper-100 disabled:opacity-40"
+          className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal text-ink-300 hover:text-paper-100 min-w-[34px]"
         >
           {delta > 0 ? `+${delta}` : delta}s
         </button>

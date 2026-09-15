@@ -32,10 +32,10 @@ function soundNote(sound: SoundState): string | null {
   if (sound.status === "failed") {
     return sound.error
       ? `The sound didn't come through: ${sound.error}`
-      : "The sound didn't come through. Try adding the track again, or drop an audio file on the floor instead.";
+      : "The sound didn't come through. Try adding the track again, or drop an audio file on the Trip page instead.";
   }
   return sound.fromLink
-    ? "This link sets the mood, but there's no audio file behind it — so it stays quiet here and in the finished film. Drop an audio file on the floor to hear it."
+    ? "This link sets the mood, but there's no audio file behind it — so it stays quiet here and in the finished film. Drop an audio file on the Trip page to hear it."
     : "There's no audio file behind this track yet, so it plays silent.";
 }
 
@@ -172,14 +172,14 @@ export function AudioInspector({
       .filter(Boolean)
       .join(" · ") || null;
   const optionsSummary =
-    [track.muted ? "Held out" : null, track.loop ? "Loops" : null].filter(Boolean).join(" · ") ||
+    [track.muted ? "Muted" : null, track.loop ? "Loops" : null].filter(Boolean).join(" · ") ||
     null;
 
   return (
     <section className="border border-[color:var(--hair-dark)] bg-ink-850">
       <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
         <div className="flex items-baseline justify-between gap-3">
-          <p className="eyebrow-light">{track.role === "bed" ? "The bed" : "Sound"}</p>
+          <p className="eyebrow-light">{track.role === "bed" ? "Music" : "Sound"}</p>
           <p className="timecode text-sm text-paper-100">{formatDuration(span)}</p>
         </div>
         <p className="timecode mt-1 truncate text-2xs text-ink-400" title={label}>
@@ -187,7 +187,7 @@ export function AudioInspector({
         </p>
         {track.role === "bed" && (
           <p className="mt-1 font-mono text-2xs text-ink-400">
-            Whatever the crew voted up. Swap it on the floor.
+            Whatever the crew voted up. Swap it on the Trip page.
           </p>
         )}
       </div>
@@ -217,7 +217,7 @@ export function AudioInspector({
               <div className="mt-2.5">
                 <button
                   onClick={toggleAudition}
-                  className="border border-[color:var(--hair-dark)] px-2 py-1 text-2xs text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
+                  className="btn-outline-dark px-2.5 font-sans text-2xs normal-case tracking-normal"
                 >
                   {auditioning ? "❙❙ Stop" : "▶ Play this track"}
                 </button>
@@ -310,7 +310,7 @@ export function AudioInspector({
                 onChange={(e) => patch({ muted: e.target.checked })}
                 className="check check-dark"
               />
-              Hold it out of the mix
+              Mute it
             </label>
           </div>
         </Section>
@@ -329,8 +329,8 @@ export function AudioInspector({
           </button>
           <p className="mt-1 text-2xs text-ink-400">
             {track.role === "bed"
-              ? "Runs the film with no music under it. Vote up a record on the floor to get a bed back."
-              : "Lifts it out of the mix. The track stays on the floor."}
+              ? "Runs the film with no music under it. Vote up a record on the Trip page to get the music back."
+              : "Lifts it out of the mix. The track stays on the Trip page."}
           </p>
         </div>
       </div>

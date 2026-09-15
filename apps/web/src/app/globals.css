@@ -454,13 +454,13 @@ body {
 
   /* Checkboxes keep the square language. */
   .check {
-    @apply h-3.5 w-3.5 shrink-0 cursor-pointer appearance-none border border-[color:var(--hair-strong)] bg-transparent
+    @apply h-4 w-4 shrink-0 cursor-pointer appearance-none border border-[color:var(--hair-strong)] bg-transparent
            checked:border-signal-600 checked:bg-signal-600;
   }
   .check:checked::after {
     content: "✓";
     display: block;
-    margin-top: -3px;
+    margin-top: -1px;
     text-align: center;
     font-size: 11px;
     line-height: 1;
@@ -476,6 +476,23 @@ body {
   .check-dark:focus-visible {
     outline-color: theme("colors.signal.400");
   }
+}
+
+/*
+ * A checkbox is the size the browser drew it — 13px — however much room the row
+ * around it has. The row is the real target, so it gets a mouse-sized height
+ * here (and a thumb-sized one in the coarse block below), and the box itself is
+ * pushed up to 16px so it can be hit on its own. Alignment is left to the label:
+ * the Film settings rows are two-line blurbs that align to their first line.
+ */
+.touch-bench label:has(> input[type="checkbox"]) {
+  min-height: 40px;
+}
+.touch-bench input[type="checkbox"] {
+  height: 16px;
+  width: 16px;
+  /* A flex row will happily squeeze a checkbox narrower than it is tall. */
+  flex: none;
 }
 
 /* Hairline scrollbars for the strips and contact sheets. */
@@ -550,7 +567,10 @@ body {
   /* A 13px checkbox is a 13px target; the row it sits on is the real one. */
   .touch-bench label:has(> input[type="checkbox"]) {
     min-height: 44px;
-    align-items: center;
+  }
+  .touch-bench input[type="checkbox"] {
+    height: 20px;
+    width: 20px;
   }
   .mark-sm {
     min-height: 30px;
@@ -567,17 +587,31 @@ body {
     font-size: 14px;
     line-height: 1.35;
   }
+  /*
+   * Icon-only buttons — play, the zoom row — have no text to give them width,
+   * so the 44px the rule above buys in height has to be asked for sideways.
+   */
+  .touch-square {
+    min-width: 44px;
+  }
+  /*
+   * The trim handles are drawn *on* the bar, so the touch-bench rule skips
+   * them (a min-height would push them out of it). Their hit zone is a width.
+   */
+  .trim-grip {
+    width: 44px;
+  }
   /* A grease-pencil line is a hard thing to catch with a fingertip. */
   .slider {
     height: 5px;
   }
   .slider::-webkit-slider-thumb {
     height: 26px;
-    width: 16px;
+    width: 20px;
   }
   .slider::-moz-range-thumb {
     height: 26px;
-    width: 16px;
+    width: 20px;
   }
   /* Native scrollbars are overlays on touch; the gutter is wasted space. */
   .scrollbar-thin::-webkit-scrollbar {

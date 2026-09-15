@@ -927,7 +927,7 @@ export function PreviewPlayer({
       <div className="flex items-center gap-2 border-t border-[color:var(--hair-dark)] bg-ink-900 px-2 py-2 sm:gap-3 sm:px-3">
         <button
           onClick={togglePlay}
-          className="shrink-0 border border-[color:var(--hair-dark)] px-2 py-1 font-mono text-[11px] text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
+          className="touch-square flex h-9 w-9 shrink-0 items-center justify-center border border-[color:var(--hair-dark)] font-mono text-[13px] leading-none text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"
           aria-label={playing ? "Pause" : "Play"}
         >
           {playing ? "❙❙" : "▶"}
@@ -974,7 +974,7 @@ export function PreviewPlayer({
         {active && (
           <button
             onClick={() => onSelectClip(active.clip.id)}
-            className="hidden shrink-0 font-mono text-2xs uppercase tracking-label text-ink-400 transition-colors hover:text-paper-100 sm:block"
+            className="hidden h-7 shrink-0 items-center border border-[color:var(--hair-dark)] px-2 font-mono text-2xs uppercase tracking-label text-ink-400 transition-colors hover:border-paper-200 hover:text-paper-100 sm:flex"
           >
             Shot {String(active.index + 1).padStart(2, "0")}
             <span className="text-ink-500">/{timeline.clips.length}</span>

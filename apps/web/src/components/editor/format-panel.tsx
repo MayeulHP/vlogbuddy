@@ -8,23 +8,11 @@ import {
   VIDEO_FORMATS,
   frameFor,
   previewFrame,
-  type ClipFit,
   type VideoFormat,
 } from "@vlogbuddy/shared";
 import { setVlogFormatAction } from "@/lib/actions/vlog";
+import { Blurb } from "./director-panel";
 import { cn } from "@/lib/cn";
-
-/**
- * This panel used to promise black edges outright. It can't any more, and a
- * panel that describes the frame while lying about what lands in it is worse
- * than one that says nothing — so it reports the film's current answer and
- * leaves the choosing to the auto-cut panel, which everyone can reach.
- */
-const FIT_POLICY_NOTE: Record<ClipFit, string> = {
-  bars: "Footage that doesn't fit gets black edges rather than a crop — nothing is ever cut off.",
-  fill: "Footage that doesn't fit is cropped to fill it — the edges of those shots are lost.",
-  blur: "Footage that doesn't fit keeps all of itself, on a blurred copy of the same shot.",
-};
 
 /**
  * The shape of the film.
@@ -41,22 +29,16 @@ export function FormatPanel({
   slug,
   format,
   shortEdge,
-  fitPolicy,
   layers,
   locked,
-  bare = false,
 }: {
   slug: string;
   format: VideoFormat;
-  /** What the film does with shots of another shape; set next door. */
-  fitPolicy: ClipFit;
   /** The operator's render size; the long edge follows from the shape. */
   shortEdge: number;
   /** How many layers are placed — they're what a change of shape disturbs. */
   layers: number;
   locked: boolean;
-  /** Inside the bench's tab strip, the tab is the panel's header. */
-  bare?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -73,21 +55,20 @@ export function FormatPanel({
   }
 
   return (
-    <section className={cn(!bare && "border border-[color:var(--hair-dark)] bg-ink-850")}>
-      <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
-        {!bare && (
-          <>
-            <p className="eyebrow-light">What comes out of the lab</p>
-            <h3 className="headline mt-0.5 text-xl text-paper-100">The frame</h3>
-          </>
-        )}
-        <p className={cn("text-[13px] leading-relaxed text-ink-300", !bare && "mt-1")}>
-          {frame.width}×{frame.height} · {FORMAT_LABELS[format].toLowerCase()}.{" "}
-          {FIT_POLICY_NOTE[fitPolicy]}
+    <section>
+      <div className="px-4 pt-4">
+        {/* What shots of another shape do here is the auto-cut's setting, and
+            it's explained where it's set — saying it again in different words
+            was the panel's own footnote contradicting itself. */}
+        <p className="eyebrow-light">
+          Shape
+          <span className="ml-2 normal-case tracking-normal text-ink-400">
+            {frame.width}×{frame.height}
+          </span>
         </p>
       </div>
 
-      <div className="space-y-4 px-4 py-4">
+      <div className="space-y-4 px-4 py-3">
         <div className="grid grid-cols-3 gap-1">
           {VIDEO_FORMATS.map((option) => {
             const chosen = option === format;
@@ -130,16 +111,24 @@ export function FormatPanel({
           })}
         </div>
 
-        <p className="text-2xs leading-relaxed text-ink-400">{FORMAT_BLURBS[format]}</p>
-
-        {layers > 0 && (
-          <p className="text-2xs leading-relaxed text-ink-400">
-            Your {layers === 1 ? "layer keeps its" : `${layers} layers keep their`} place in the
-            frame, but a new shape stretches {layers === 1 ? "it" : "them"} — worth a look at the
-            preview afterwards. Switch back and {layers === 1 ? "it's" : "they're"} exactly as
-            you left {layers === 1 ? "it" : "them"}.
-          </p>
-        )}
+        {/* Both of these run to a paragraph, and neither is news until you're
+            about to change the shape — so they wait behind the mark. */}
+        <p className="eyebrow-light">
+          About this shape
+          <Blurb label="the shape">
+            {FORMAT_BLURBS[format]}
+            {layers > 0 && (
+              <>
+                {" "}
+                Your {layers === 1 ? "layer keeps its" : `${layers} layers keep their`} place in
+                the frame, but a new shape stretches {layers === 1 ? "it" : "them"} — worth a look
+                at the preview afterwards. Switch back and{" "}
+                {layers === 1 ? "it's" : "they're"} exactly as you left{" "}
+                {layers === 1 ? "it" : "them"}.
+              </>
+            )}
+          </Blurb>
+        </p>
 
         {error && <p className="text-2xs text-rust-400">{error}</p>}
       </div>

@@ -593,7 +593,7 @@ export function MusicLane({
                       className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-ink-950/92 px-2 text-center"
                     >
                       <p className="font-mono text-2xs uppercase tracking-label text-paper-200">
-                        Pull this track?
+                        Take this out?
                       </p>
                       <div className="flex flex-wrap items-center justify-center gap-1">
                         <button
@@ -605,7 +605,7 @@ export function MusicLane({
                           autoFocus
                           className="flex min-h-[32px] min-w-[44px] items-center justify-center bg-signal-600 px-2 font-mono text-2xs uppercase tracking-label text-paper-50 transition-colors hover:bg-signal-700 disabled:opacity-60"
                         >
-                          Pull it
+                          Take out
                         </button>
                         <button
                           onClick={() => setArmedId(null)}
@@ -654,7 +654,7 @@ export function MusicLane({
       {trimTrack && (
         <div className="mt-3 border border-[color:var(--hair-dark)] bg-ink-900 p-4">
           <div className="flex items-baseline justify-between gap-3">
-            <p className="eyebrow-light">Trim the bed</p>
+            <p className="eyebrow-light">Trim the music</p>
             <button onClick={() => setTrimmingId(null)} className="btn-quiet-dark px-0">
               Done
             </button>

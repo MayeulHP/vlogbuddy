@@ -126,7 +126,7 @@ export function SoundPicker({
       <div className="max-h-72 overflow-y-auto">
         {audioUploads.length === 0 && music.length === 0 ? (
           <p className="px-4 py-3 font-mono text-2xs text-ink-400">
-            No sound in the pile yet. Drop an audio file or paste a link on the floor.
+            No sound in the pile yet. Drop an audio file or paste a link on the Trip page.
           </p>
         ) : (
           <>

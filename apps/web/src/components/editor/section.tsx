@@ -63,16 +63,18 @@ export function Section({
 
   return (
     <div className="border-t border-[color:var(--hair-dark)] first:border-t-0">
+      {/* 40px tall and 12px type: this is the handle for every fold in the
+          inspector, and it was the smallest text on the page. */}
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 py-3 text-left transition-colors hover:text-paper-100"
+        className="flex min-h-[40px] w-full items-center gap-2 py-2.5 text-left transition-colors hover:text-paper-100"
       >
-        <span aria-hidden className="shrink-0 font-mono text-2xs text-ink-400">
+        <span aria-hidden className="shrink-0 font-mono text-xs text-ink-400">
           {open ? "▾" : "▸"}
         </span>
-        <span className="eyebrow-light shrink-0">{title}</span>
+        <span className="eyebrow-light shrink-0 text-xs">{title}</span>
         {!open && summary && (
           <span className="ml-auto flex min-w-0 items-center gap-1.5">
             <span aria-hidden className="h-1.5 w-1.5 shrink-0 bg-signal-500" />

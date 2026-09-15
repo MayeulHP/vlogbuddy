@@ -85,7 +85,7 @@ export function SliderField({
               commit(e.currentTarget.value);
             }
           }}
-          className="field-dark timecode hidden w-14 shrink-0 py-0.5 text-2xs sm:block"
+          className="field-dark timecode hidden h-8 w-14 shrink-0 py-0 text-2xs sm:block"
           aria-label={ariaLabel}
         />
       </div>
