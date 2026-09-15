@@ -2,6 +2,9 @@
 
 import { useState, useTransition } from "react";
 import {
+  CLIP_FITS,
+  FIT_BLURBS,
+  FIT_LABELS,
   PACE_BLURBS,
   PACE_LABELS,
   PACE_PRESETS,
@@ -11,6 +14,7 @@ import {
   type TimelineDoc,
 } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
+import type { BeatStatus } from "@/lib/beat-status";
 import { runDirectorAction } from "@/lib/actions/timeline";
 import { cn } from "@/lib/cn";
 
@@ -28,12 +32,18 @@ export function DirectorPanel({
   slug,
   timeline,
   mediaById,
+  beat,
   locked,
+  bare = false,
 }: {
   slug: string;
   timeline: TimelineDoc;
   mediaById: Map<string, MediaItemView>;
+  /** Whether there's a pulse to cut to, and the reason when there isn't. */
+  beat: BeatStatus;
   locked: boolean;
+  /** Inside the bench accordion, the fold's own header is the panel's header. */
+  bare?: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -65,16 +75,21 @@ export function DirectorPanel({
     });
   }
 
+  const blurb =
+    scenes.length > 1
+      ? `${timeline.clips.length} shots across ${scenes.length} scenes, timed by the crew's marks.`
+      : "Every shot timed by the crew's marks.";
+
   return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
+    <section className={cn(!bare && "border border-[color:var(--hair-dark)] bg-ink-850")}>
       <div className="border-b border-[color:var(--hair-dark)] px-4 py-3">
-        <p className="eyebrow-light">Straight from the vote</p>
-        <h3 className="headline mt-0.5 text-xl text-paper-100">Auto-cut</h3>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-300">
-          {scenes.length > 1
-            ? `${timeline.clips.length} shots across ${scenes.length} scenes, timed by the crew's marks.`
-            : "Every shot timed by the crew's marks."}
-        </p>
+        {!bare && (
+          <>
+            <p className="eyebrow-light">Straight from the vote</p>
+            <h3 className="headline mt-0.5 text-xl text-paper-100">Auto-cut</h3>
+          </>
+        )}
+        <p className={cn("text-[13px] leading-relaxed text-ink-300", !bare && "mt-1")}>{blurb}</p>
       </div>
 
       <div className="space-y-5 px-4 py-4">
@@ -103,6 +118,39 @@ export function DirectorPanel({
           </p>
         </div>
 
+        {/*
+          The default every shot of the wrong shape starts from, and open to
+          anyone: you can already reframe any single shot from the inspector, so
+          gating the default would be a lock with the door open. The frame
+          itself, stacked directly below in this same tab, is open for exactly
+          the same reason. It rides on the same open action as the pace above.
+        */}
+        <div>
+          <p className="eyebrow-light mb-2">Shots of the wrong shape</p>
+          <div className="grid grid-cols-3 gap-1">
+            {CLIP_FITS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                disabled={locked || pending}
+                onClick={() => run({ settings: { fitPolicy: option } })}
+                className={cn(
+                  "border px-2 py-2 text-xs transition-colors disabled:opacity-50",
+                  director.fitPolicy === option
+                    ? "border-paper-100 bg-paper-100 text-ink-900"
+                    : "border-[color:var(--hair-dark)] text-ink-300 hover:text-paper-100",
+                )}
+              >
+                {FIT_LABELS[option]}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-2xs leading-relaxed text-ink-400">
+            {FIT_BLURBS[director.fitPolicy]} Shots already pointing the right way are left
+            alone, and any one shot can be set its own way from the shot panel.
+          </p>
+        </div>
+
         <label className="flex cursor-pointer items-start gap-2.5">
           <input
             type="checkbox"
@@ -120,20 +168,38 @@ export function DirectorPanel({
           </span>
         </label>
 
-        <label className="flex cursor-pointer items-start gap-2.5">
+        {/*
+          Offered only when there's something to cut to. A tickable box that
+          provably changes nothing is a bug report waiting to happen, so when
+          the bed has no pulse the box goes flat and says why instead.
+        */}
+        <label
+          className={cn(
+            "flex items-start gap-2.5",
+            beat.grid ? "cursor-pointer" : "cursor-not-allowed",
+          )}
+        >
           <input
             type="checkbox"
             checked={director.beatSnap}
-            disabled={locked || pending}
+            disabled={locked || pending || !beat.grid}
             onChange={(e) => run({ settings: { beatSnap: e.target.checked } })}
-            className="mt-0.5 accent-paper-100"
+            className="mt-0.5 accent-paper-100 disabled:opacity-50"
           />
           <span>
-            <span className="block text-[13px] text-paper-100">Cut on the beat</span>
+            <span className={cn("block text-[13px]", beat.grid ? "text-paper-100" : "text-ink-400")}>
+              Cut on the beat
+            </span>
             <span className="block text-2xs leading-relaxed text-ink-400">
-              Nudges each cut onto the nearest beat of the music. Shots keep the length
-              the crew&rsquo;s marks bought them — only the exact moment moves. Needs a
-              track with a pulse we could find; otherwise nothing changes.
+              {beat.grid ? (
+                <>
+                  Nudges each cut onto the nearest beat of the music — {Math.round(beat.grid.bpm)}{" "}
+                  bpm, marked along the ruler. Shots keep the length the crew&rsquo;s marks bought
+                  them; only the exact moment moves.
+                </>
+              ) : (
+                beat.reason
+              )}
             </span>
           </span>
         </label>

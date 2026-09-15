@@ -36,7 +36,7 @@ import {
   type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
-import { buildFilterGraph } from "./jobs/render.js";
+import { planRender, type RenderPlan } from "./jobs/render.js";
 import { probe, supportsDrawText } from "./ffmpeg.js";
 
 const DIR = process.argv[2] ?? "/tmp/vbrender";
@@ -53,7 +53,21 @@ const OUT = path.join(DIR, "out");
 
 let failures = 0;
 
-function media(id: string, kind: "photo" | "video", file: string, duration: number | null): MediaItem {
+/**
+ * Dimensions default to null, which is what an item looks like between the
+ * upload and the probe — and what makes `auto` resolve to bars. The fit cases
+ * below pass the real ones, because that is the only way `auto` ever reaches
+ * the film's policy.
+ */
+function media(
+  id: string,
+  kind: "photo" | "video",
+  file: string,
+  duration: number | null,
+  dims: { width: number; height: number } | null = null,
+  /** Degrees clockwise, as a person would say it — the manual correction. */
+  rotation = 0,
+): MediaItem {
   return {
     id,
     vlogId: "v",
@@ -65,8 +79,9 @@ function media(id: string, kind: "photo" | "video", file: string, duration: numb
     storageKey: file,
     proxyKey: null,
     thumbnailKey: null,
-    width: null,
-    height: null,
+    width: dims?.width ?? null,
+    height: dims?.height ?? null,
+    rotation,
     durationSeconds: duration,
     capturedAt: null,
     uploadIndex: 0,
@@ -86,6 +101,9 @@ function clip(over: Partial<Clip> & Pick<Clip, "id" | "mediaItemId">): Clip {
     trimStart: 0,
     trimEnd: null,
     duration: 3,
+    fit: "auto",
+    speed: 1,
+    look: "none",
     transitionIn: "cut",
     transitionDuration: 0.5,
     volume: 1,
@@ -102,6 +120,35 @@ function layer(over: Partial<Layer> & Pick<Layer, "id" | "mediaItemId">): Layer 
 
 function track(over: Partial<Track> = {}): Track {
   return audioTrackSchema.parse({ role: "bed", ...over });
+}
+
+/**
+ * Runs a plan the way the worker does: write its files, then every pass in
+ * order. A pass that fails takes its label with it — "shot 3 of 14" is a far
+ * better start than a filtergraph error on its own.
+ */
+async function runPlan(plan: RenderPlan): Promise<void> {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  await mkdir(path.dirname(plan.outputPath), { recursive: true });
+  for (const file of plan.files) await writeFile(file.path, file.contents);
+
+  for (const pass of plan.passes) {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        "ffmpeg",
+        ["-hide_banner", "-nostdin", "-y", "-loglevel", "error", ...pass.args],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      let stderr = "";
+      child.stderr.on("data", (d) => (stderr += d.toString()));
+      child.on("close", (code, signal) =>
+        code === 0
+          ? resolve()
+          : reject(new Error(`${pass.label} — ${signal ?? `exit ${code}`}\n${stderr.slice(-1200)}`)),
+      );
+      child.on("error", reject);
+    });
+  }
 }
 
 /** Extracts a single frame as raw bytes, for comparing two renders. */
@@ -148,6 +195,12 @@ async function runCase(
   expectTextAt?: number,
   /** When set, assert that a layer actually changes the frame at this timestamp. */
   expectLayerAt?: number,
+  /** The output frame. Defaults to the 16:9 shape most cases here render in. */
+  frame: { width: number; height: number } = { width: 1280, height: 720 },
+  /** When set, assert the fit actually changed the picture at this timestamp. */
+  expectFitAt?: number,
+  /** When set, assert the manual rotation actually turned the picture. */
+  expectRotationAt?: number,
 ) {
   const mediaById = new Map(mediaList.map((m) => [m.id, m]));
   const localPaths = new Map(Object.entries(files).map(([id, f]) => [id, path.join(DIR, f)]));
@@ -172,42 +225,37 @@ async function runCase(
     for (const t of timeline.audio) audioPaths.set(t.id, path.join(DIR, audioPath));
   }
 
-  const outFile = path.join(OUT, `${name}.mp4`);
-
-  try {
-    const { args, outputLabel, audioLabel } = buildFilterGraph({
-      timeline,
-      mediaById,
+  /**
+   * Each render gets its own working directory, because a plan leaves its
+   * pieces next to the film it made and two cases would otherwise join each
+   * other's reels.
+   */
+  const planFor = async (
+    suffix: string,
+    variant: TimelineDoc,
+    allowTitles: boolean,
+    variantMedia: Map<string, MediaItem> = mediaById,
+  ) =>
+    planRender({
+      timeline: variant,
+      mediaById: variantMedia,
       localPaths,
       hasAudio,
       audioPaths,
-      width: 1280,
-      height: 720,
+      width: frame.width,
+      height: frame.height,
       fps: 30,
-      allowTitles: await supportsDrawText(),
+      allowTitles,
       fontFile: process.env.FONT_PATH || null,
+      workDir: path.join(OUT, suffix ? `${name}.${suffix}` : name),
+      // Fast and rough: what's under test is the graph, not the picture.
+      encode: { crf: 28, preset: "ultrafast", threads: 0 },
     });
 
-    const full = [
-      "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
-      ...args,
-      "-map", outputLabel,
-      ...(audioLabel ? ["-map", audioLabel] : []),
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", "-r", "30",
-      ...(audioLabel ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
-      "-movflags", "+faststart",
-      outFile,
-    ];
-
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn("ffmpeg", full, { stdio: ["ignore", "pipe", "pipe"] });
-      let stderr = "";
-      child.stderr.on("data", (d) => (stderr += d.toString()));
-      child.on("close", (code) =>
-        code === 0 ? resolve() : reject(new Error(stderr.slice(-1500))),
-      );
-      child.on("error", reject);
-    });
+  try {
+    const main = await planFor("", timeline, await supportsDrawText());
+    await runPlan(main);
+    const outFile = main.outputPath;
 
     // Verify the output actually decodes and has the expected streams.
     const probe = await new Promise<string>((resolve, reject) => {
@@ -225,8 +273,10 @@ async function runCase(
     const a = info.streams?.find((s: { codec_type: string }) => s.codec_type === "audio");
     const duration = Number(info.format?.duration ?? 0);
 
-    const okDims = v?.width === 1280 && v?.height === 720;
-    const okAudio = audioLabel ? Boolean(a) : true;
+    const okDims = v?.width === frame.width && v?.height === frame.height;
+    // Every film gets a sound track, even a silent one — the base track's own
+    // audio is built whether or not anything in the cut can be heard.
+    const okAudio = Boolean(a);
 
     /**
      * A valid MP4 isn't proof anything was drawn: drawtext can silently render
@@ -234,28 +284,18 @@ async function runCase(
      * composited. Re-render the same timeline with the feature removed and
      * compare a frame — matching bytes mean it never appeared.
      */
-    async function renderVariant(suffix: string, variant: TimelineDoc, allowTitles: boolean) {
-      const file = path.join(OUT, `${name}.${suffix}.mp4`);
-      const g = buildFilterGraph({
-        timeline: variant, mediaById, localPaths, hasAudio, audioPaths,
-        width: 1280, height: 720, fps: 30,
-        allowTitles,
-        fontFile: process.env.FONT_PATH || null,
-      });
-      await new Promise<void>((resolve) => {
-        const c = spawn("ffmpeg", [
-          "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
-          ...g.args, "-map", g.outputLabel,
-          ...(g.audioLabel ? ["-map", g.audioLabel] : []),
-          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-          "-pix_fmt", "yuv420p", "-r", "30",
-          ...(g.audioLabel ? ["-c:a", "aac"] : ["-an"]),
-          file,
-        ], { stdio: "ignore" });
-        c.on("close", () => resolve());
-        c.on("error", () => resolve());
-      });
-      return file;
+    async function renderVariant(
+      suffix: string,
+      variant: TimelineDoc,
+      allowTitles: boolean,
+      /** Rotation lives on the media, so one variant has to vary that instead. */
+      variantMedia: Map<string, MediaItem> = mediaById,
+    ) {
+      const plan = await planFor(suffix, variant, allowTitles, variantMedia);
+      // A variant that won't build is a failure of the comparison, not of the
+      // case: the frame check below reports it as "could not compare".
+      await runPlan(plan).catch(() => {});
+      return plan.outputPath;
     }
 
     async function assertDiffers(bare: string, at: number, what: string, minDelta = 0) {
@@ -284,6 +324,52 @@ async function runCase(
         notes += problem;
       } else {
         notes += "  title drawn ✓";
+      }
+    }
+
+    /**
+     * A fill or a blur that silently fell back to bars still makes a valid
+     * MP4 of the right size. The only proof is the picture: render the same
+     * film with every shot pinned to bars and demand the frames differ.
+     */
+    if (expectFitAt !== undefined) {
+      const bars = await renderVariant(
+        "bars",
+        {
+          ...timeline,
+          clips: timeline.clips.map((c) => ({ ...c, fit: "bars" as const })),
+          director: { ...timeline.director, fitPolicy: "bars" as const },
+        },
+        await supportsDrawText(),
+      );
+      const problem = await assertDiffers(bars, expectFitAt, "FIT", 2);
+      if (problem) {
+        drewOk = false;
+        notes += problem;
+      } else {
+        notes += "  fit applied ✓";
+      }
+    }
+
+    /**
+     * A transpose that never made it into the graph leaves a perfectly good
+     * MP4 of a sideways shot. Re-render with every file's rotation cleared and
+     * demand the picture changed — which also pins the other half of the
+     * contract: with rotation at 0 the graph must be the one it always was.
+     */
+    if (expectRotationAt !== undefined) {
+      const straight = new Map(
+        [...mediaById].map(([id, m]) => [id, { ...m, rotation: 0 } as MediaItem]),
+      );
+      const upright = await renderVariant(
+        "unrotated", timeline, await supportsDrawText(), straight,
+      );
+      const problem = await assertDiffers(upright, expectRotationAt, "ROTATION", 2);
+      if (problem) {
+        drewOk = false;
+        notes += problem;
+      } else {
+        notes += "  rotation applied ✓";
       }
     }
 
@@ -325,6 +411,24 @@ async function main() {
     v2: media(ID.v2, "video", "video2_portrait.mp4", 5),
     vs: media(ID.vs, "video", "video_silent.mp4", 4),
   };
+
+  /**
+   * The same two landscape sources, but probed — so `auto` can see they point
+   * the other way to an upright frame. Same files, same ids: only what the
+   * database knows about them differs.
+   */
+  const probed = {
+    p1: media(ID.p1, "photo", "photo1.jpg", null, { width: 1920, height: 1080 }),
+    v1: media(ID.v1, "video", "video1.mp4", 6, { width: 1280, height: 720 }),
+  };
+  /**
+   * The same landscape photo, declared sideways — a file whose rotation
+   * metadata lies, which is the only reason this feature exists.
+   */
+  const turned = {
+    p1: media(ID.p1, "photo", "photo1.jpg", null, { width: 1920, height: 1080 }, 90),
+  };
+
   const files = {
     [ID.p1]: "photo1.jpg",
     [ID.p2]: "photo2.jpg",
@@ -388,6 +492,37 @@ async function main() {
     }),
     [m.p1, m.v1], files, null,
     1.2, // assert the title is actually visible here
+  );
+
+  /**
+   * 4b. A title on a shot that is dissolved into.
+   *
+   * A title's times are relative to its own clip, but the dissolve is printed as
+   * a piece of its own covering the head of that clip, so the shot's own piece
+   * starts 0.8s in and its `t` starts again at zero. A title that hasn't moved
+   * with the piece therefore comes up 0.8s late — or not at all, if the clip
+   * ends first.
+   *
+   * The film is a(2) + dissolve(0.8) + b: the dissolve runs 1.2 → 2.0 and b's
+   * own piece from 2.0. The title is set 1s into b, which is 2.2s into the film,
+   * so it must be on screen at 2.5 — and would not be without the shift.
+   */
+  await runCase(
+    "title-after-dissolve",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 2 }),
+        clip({
+          id: "b", mediaItemId: ID.p2, duration: 2,
+          transitionIn: "crossfade", transitionDuration: 0.8,
+          titles: [
+            { id: "t", text: "Still here", start: 1, duration: 1, position: "center", fontSize: 64, color: "#ffffff" },
+          ],
+        }),
+      ],
+    }),
+    [m.p1, m.p2], files, null,
+    2.5,
   );
 
   // 5. Music bed mixed over clip audio, with ducking.
@@ -590,9 +725,152 @@ async function main() {
   const directed = runDirector(reconcileClips(emptyTimeline(), autoCut), {
     cut: autoCut,
     threshold: 0,
-    settings: { enabled: true, pace: "snappy", sceneText: true, beatSnap: false },
+    settings: { enabled: true, pace: "snappy", sceneText: true, beatSnap: false, fitPolicy: "blur" },
   });
   await runCase("director-output", directed, [m.p1, m.v1, m.p2, m.v2], files, null);
+
+  /**
+   * 20. The same film in an upright frame. Nothing in the graph is written for
+   * a shape, but that's easy to say and hard to believe: this mixes landscape
+   * stills, a landscape video and a portrait video into 720×1280, with a layer
+   * over the top whose geometry is fractions of a frame that is now taller than
+   * it is wide.
+   */
+  await runCase(
+    "portrait-frame",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 1.5 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2 }),
+        clip({ id: "c", mediaItemId: ID.v2, kind: "video", trimStart: 0, trimEnd: 2, transitionIn: "crossfade", transitionDuration: 0.5 }),
+      ],
+      layers: [layer({ id: "l1", mediaItemId: ID.p2, startAt: 0.5, duration: 2, x: 0.55, y: 0.05, width: 0.4 })],
+    }),
+    [m.p1, m.v1, m.v2, m.p2], files, null,
+    undefined,
+    1.2,
+    { width: 720, height: 1280 },
+  );
+
+  // 21. And square, where neither dimension is the long one.
+  await runCase(
+    "square-frame",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p2, duration: 1.5 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2, transitionIn: "dipblack", transitionDuration: 0.5 }),
+      ],
+    }),
+    [m.p2, m.v1], files, null,
+    undefined,
+    undefined,
+    { width: 1080, height: 1080 },
+  );
+
+  /**
+   * 22. Landscape footage in an upright frame, cropped to fill it. Explicit
+   * per-shot fits, so this is the override path: what somebody gets when they
+   * press Fill on a shot regardless of what the film does by default.
+   */
+  await runCase(
+    "fit-fill-portrait",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 1.5, fit: "fill" }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2, fit: "fill" }),
+      ],
+    }),
+    [probed.p1, probed.v1], files, null,
+    undefined,
+    undefined,
+    { width: 720, height: 1280 },
+    1,
+  );
+
+  /**
+   * 23. The same footage and frame, left on `auto` with the film's policy set
+   * to blur — the default path, and the one that has to survive both a hard
+   * cut and a dissolve, since blur builds a split/overlay graph per shot and
+   * xfade is unforgiving about what it's handed.
+   */
+  await runCase(
+    "fit-blur-portrait",
+    doc({
+      director: { ...emptyTimeline().director, fitPolicy: "blur" },
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 1.5 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2 }),
+        clip({
+          id: "c",
+          mediaItemId: ID.p1,
+          duration: 1.5,
+          transitionIn: "crossfade",
+          transitionDuration: 0.5,
+        }),
+      ],
+    }),
+    [probed.p1, probed.v1], files, null,
+    undefined,
+    undefined,
+    { width: 720, height: 1280 },
+    1,
+  );
+
+  /**
+   * 24. A file that lies about which way up it is, put right by hand. The
+   * turn has to reach the picture — and, because it swaps the shot's
+   * orientation, it also has to reach the fit: this is a landscape file
+   * declared sideways, so what the frame gets is a portrait shot.
+   */
+  await runCase(
+    "rotate-photo",
+    doc({
+      clips: [clip({ id: "a", mediaItemId: ID.p1, duration: 2 })],
+    }),
+    [turned.p1], files, null,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    1,
+  );
+
+  /**
+   * 25. Speed and a look on the same shot. The speed is the interesting half:
+   * the input is asked for `length * speed` seconds of file and `setpts` has
+   * to squeeze exactly that back into the piece the plan measured, or the
+   * picture and the sound part company for the rest of the film. Both the
+   * fast and the slow side, because the atempo chain is different code.
+   */
+  await runCase(
+    "speed-and-look",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4, speed: 2, look: "warm" }),
+        clip({ id: "b", mediaItemId: ID.v2, kind: "video", trimStart: 0, trimEnd: 1, speed: 0.5, look: "mono" }),
+        clip({ id: "c", mediaItemId: ID.p1, duration: 1.5, look: "faded" }),
+      ],
+    }),
+    [m.v1, m.v2, m.p1], files, null,
+  );
+
+  /**
+   * 26. A sped-up shot followed by a dissolve — case 18's timebase trap, but
+   * now the piece feeding `xfade` has been through `setpts` as well. The
+   * resample happens before `fps`/`settb`, so the timebase should still be the
+   * one the join and the dissolve both insist on.
+   */
+  await runCase(
+    "speed-then-dissolve",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 1.5 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4, speed: 2, transitionIn: "cut" }),
+        clip({ id: "c", mediaItemId: ID.p2, duration: 2, transitionIn: "crossfade", transitionDuration: 0.6 }),
+      ],
+    }),
+    [m.p1, m.v1, m.p2], files, null,
+  );
 
   console.log(
     failures === 0

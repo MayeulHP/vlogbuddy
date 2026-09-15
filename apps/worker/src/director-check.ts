@@ -14,7 +14,7 @@
 import {
   applyTimelineOp, detectScenes, emptyTimeline, reconcileClips, runDirector,
   timelineDuration, clipDuration, sceneLabel, TRANSITION_LABELS,
-  beatGridInFilmTime, clipStartTimes, nearestBeat,
+  beatGridInFilmTime, clipStartTimes, nearestBeat, beatsBetween, BEAT_HIT_WINDOW,
   type BeatGrid, type CutEntry, type TimelineDoc,
 } from "@vlogbuddy/shared";
 import { HOP_SECONDS, onsetEnvelope, trackBeats } from "./beats";
@@ -41,7 +41,15 @@ const cut: CutEntry[] = offsets.map((m, i) => ({
 const input = {
   cut,
   threshold: 0,
-  settings: { enabled: true, pace: "standard" as const, sceneText: true, beatSnap: false },
+  settings: {
+    enabled: true,
+    pace: "standard" as const,
+    sceneText: true,
+    beatSnap: false,
+    // The director neither reads nor writes this; it is here because the
+    // settings object is the whole schema.
+    fitPolicy: "blur" as const,
+  },
 };
 
 // --- scenes -----------------------------------------------------------------
@@ -102,6 +110,54 @@ first.clips.forEach((c, i) => {
 // hold floor must stay clear of the renderer's transition clamp
 const floor = Math.min(...first.clips.map((c, i) => clipDuration(c, durations[c.mediaItemId])));
 ok(floor >= 0.7, "shortest hold stays above the renderer's transition clamp", `${floor.toFixed(2)}s`);
+
+// --- splitting a shot -------------------------------------------------------
+// A split puts two clips on the base track for one media item. The cut is still
+// a list of media, so reconciliation has to keep both halves — key one clip per
+// item and the second half vanishes on the next vote, which is a lost edit
+// nobody would think to report.
+{
+  const target = first.clips[1];
+  const before = clipDuration(target, durations[target.mediaItemId]);
+  const at = 1.0;
+  const split = applyTimelineOp(first, {
+    type: "clip.split", clipId: target.id, at, newClipId: "split-half-2",
+  });
+  ok(split.clips.length === first.clips.length + 1, "splitting adds a clip");
+  const [head, tail] = [split.clips[1], split.clips[2]];
+  ok(head.mediaItemId === tail.mediaItemId && tail.id === "split-half-2",
+     "both halves point at the same shot, under the caller's id");
+  // Source times land on the 2dp grid the trim handles use, so the cut point is
+  // near enough the asked-for moment and *exactly* shared by the two halves.
+  ok(Math.abs(head.trimEnd! - (target.trimStart + at)) < 0.01 && tail.trimStart === head.trimEnd,
+     "the halves meet exactly at the cut", `${head.trimEnd} / ${tail.trimStart}`);
+  ok(Math.abs(clipDuration(head, durations[head.mediaItemId])
+      + clipDuration(tail, durations[tail.mediaItemId]) - before) < 0.02,
+     "and together still play for as long as the shot did");
+  ok(!head.auto.includes("timing") && !tail.auto.includes("timing"),
+     "a split is a hand edit, so neither half is the auto-cut's to re-time");
+  ok(tail.transitionIn === "cut", "the second half comes in on a cut");
+
+  // The whole point: a vote after a split must not swallow the second half.
+  const reconciled = reconcileClips(split, cut);
+  ok(reconciled.clips.length === split.clips.length &&
+     reconciled.clips.every((c, i) => c === split.clips[i]),
+     "reconciling after a split returns the IDENTICAL clips",
+     `${reconciled.clips.length} clips`);
+  ok(reconciled === split, "...and the identical document, so no revision churns");
+  const afterVote = runDirector(reconciled, input);
+  ok(afterVote.clips.length === split.clips.length, "and the director leaves both halves standing");
+  ok(afterVote.clips[1].trimEnd === head.trimEnd && afterVote.clips[2].trimStart === tail.trimStart,
+     "with the cut point exactly where it was put");
+  ok(runDirector(afterVote, input) === afterVote, "the identity contract survives a split");
+
+  // Edges: a split that would leave a flash frame is simply not made.
+  for (const bad of [0.05, before - 0.05, before + 3]) {
+    ok(applyTimelineOp(first, { type: "clip.split", clipId: target.id, at: bad, newClipId: "x" }) === first,
+       `a split ${bad.toFixed(2)}s in is refused rather than trimmed to nothing`);
+  }
+}
+
 
 // --- the beat ---------------------------------------------------------------
 // Two halves: the estimator can find a tempo in a signal, and the director
@@ -176,6 +232,20 @@ ok(onBeat >= snapped.clips.length - 2, "cuts land on the beat",
    `${onBeat}/${snapped.clips.length}`);
 ok(overBudget === 0, "and no shot was stretched past its budget to get there");
 ok(snapped !== plain, "beat-snapping actually retimed the cut");
+
+/*
+ * The bench draws the grid the cut was snapped against, and highlights the
+ * beats a cut hit. `beatsBetween` fills in the periodic grid either side of
+ * the measured stretch exactly as `nearestBeat` falls back to it — if the two
+ * ever drift, the ruler starts lighting beats the cut never touched.
+ */
+const withMeasured: BeatGrid = { bpm: 120, firstBeat: 0, beats: [0, 0.5, 1, 1.5, 2, 2.5, 3] };
+for (const g of [onTheBeat, withMeasured]) {
+  const drawn = beatsBetween(g, 0, 30);
+  const strays = drawn.filter((b) => Math.abs(nearestBeat(b, g) - b) > BEAT_HIT_WINDOW);
+  ok(strays.length === 0, "every beat the ruler draws is a beat the cut would snap to",
+     `${drawn.length} beats`);
+}
 
 // (g) the identity contract, with a grid in play
 const snappedAgain = runDirector(snapped, beatInput);

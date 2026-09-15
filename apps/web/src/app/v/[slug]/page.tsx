@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { getRenderSettings } from "@vlogbuddy/db";
 import { getCurrentMember, getVlogBySlug } from "@/lib/session";
 import {
   getLatestRenderJob,
@@ -51,19 +52,19 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
           <div className="border-t border-[color:var(--hair)] bg-paper-100 px-6 py-3">
             <div className="flex items-center justify-between">
               <span className="eyebrow">Roll</span>
-              <span className="timecode text-2xs text-ink-500">{vlog.shareSlug}</span>
+              <span className="timecode text-2xs text-ink-600">{vlog.shareSlug}</span>
             </div>
           </div>
         </div>
 
-        <p className="mt-5 text-center font-mono text-2xs leading-relaxed text-ink-500">
+        <p className="mt-5 text-center font-mono text-2xs leading-relaxed text-ink-600">
           Everyone brought the footage. Make the film together.
         </p>
       </main>
     );
   }
 
-  const [media, music, membersList, timeline, latestRender, published, immich] =
+  const [media, music, membersList, timeline, latestRender, published, immich, renderSettings] =
     await Promise.all([
       getMediaItems(vlog.id, member.id),
       getMusicItems(vlog.id, member.id),
@@ -72,6 +73,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
       getLatestRenderJob(vlog.id),
       getPublishedRender(vlog.id),
       connectionForMember(member.id),
+      getRenderSettings(),
     ]);
 
   return (
@@ -83,6 +85,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
         shareSlug: vlog.shareSlug,
         state: vlog.state,
         scoreThreshold: vlog.scoreThreshold,
+        format: vlog.format,
       }}
       member={{
         id: member.id,
@@ -103,6 +106,10 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
       publishedRender={published}
       immichConnection={immich ? publicConnection(immich) : null}
       shareUrl={`${env().PUBLIC_BASE_URL}/v/${vlog.shareSlug}`}
+      /* The operator's quality setting, read as the film's shorter edge — the
+         bench shows what the vlog's shape actually comes out as. */
+      renderShortEdge={renderSettings.renderHeight}
+      renderFps={renderSettings.renderFps}
       ytAudioEnabled={env().ENABLE_YT_AUDIO}
     />
   );

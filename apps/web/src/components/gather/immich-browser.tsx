@@ -103,7 +103,7 @@ export function ImmichBrowser({
             <h2 className="headline truncate text-lg text-ink-900 sm:text-xl">
               {open ? open.albumName : "Import from your library"}
             </h2>
-            <p className="truncate font-mono text-2xs uppercase tracking-label text-ink-500">
+            <p className="truncate font-mono text-2xs uppercase tracking-label text-ink-600">
               {open
                 ? `${open.assetCount} item${open.assetCount === 1 ? "" : "s"}`
                 : "straight off your own server"}
@@ -188,7 +188,7 @@ function AlbumGrid({
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
               />
             ) : (
-              <div className="flex h-full items-center justify-center font-mono text-2xs uppercase tracking-label text-ink-500">
+              <div className="flex h-full items-center justify-center font-mono text-2xs uppercase tracking-label text-ink-400">
                 no cover
               </div>
             )}

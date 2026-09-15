@@ -9,8 +9,10 @@ import {
   emptyTimeline,
   generateSlug,
   generateToken,
+  isWorkingState,
   joinVlogSchema,
   setStateSchema,
+  videoFormatSchema,
   type VlogState,
 } from "@vlogbuddy/shared";
 import {
@@ -162,6 +164,43 @@ export async function setVlogStateAction(slug: string, state: VlogState): Promis
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
+/**
+ * Change the shape of the finished film.
+ *
+ * Creator-only, like printing it: it re-proportions every layer anyone has
+ * placed and decides what the lab hands back, which isn't a thing a guest
+ * should be able to do to somebody else's film from the other room. Nothing
+ * on the timeline is rewritten — geometry is stored as fractions of the frame
+ * precisely so it survives this — so switching back restores the old layout.
+ */
+export async function setVlogFormatAction(slug: string, format: string): Promise<ActionResult> {
+  const parsed = videoFormatSchema.safeParse(format);
+  if (!parsed.success) return { ok: false, error: "That's not a shape we can print" };
+
+  try {
+    // Open to the whole crew, on the same reasoning as the fit policy next to
+    // it: anyone on the bench can already reframe any single shot, so gating
+    // the shape they all cut for would be a lock with the door open. The lab
+    // still closes it — a film being printed has its shape settled.
+    const session = await requireMemberBySlug(slug);
+
+    if (!isWorkingState(session.vlog.state)) {
+      return { ok: false, error: "This film is at the lab — its shape is already set" };
+    }
+
+    await db
+      .update(vlogs)
+      .set({ format: parsed.data, updatedAt: new Date() })
+      .where(eq(vlogs.id, session.vlog.id));
+
+    emitToVlog(session.vlog.id, "vlog:format", { format: parsed.data });
+    revalidatePath(`/v/${slug}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Couldn't change the shape" };
   }
 }
 

@@ -57,7 +57,7 @@ export function JoinForm({ slug, requiresPasscode }: { slug: string; requiresPas
         {pending ? "Signing in…" : "Join the crew"}
       </button>
 
-      <p className="font-mono text-2xs leading-relaxed text-ink-500">
+      <p className="font-mono text-2xs leading-relaxed text-ink-600">
         No account, no password — just a name your friends will recognise on the credits.
       </p>
     </form>

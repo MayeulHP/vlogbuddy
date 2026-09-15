@@ -6,6 +6,7 @@ import {
   completeUploadSchema,
   kindForMimeType,
   isWorkingState,
+  nextRotation,
   presignUploadSchema,
   slugifyFilename,
 } from "@vlogbuddy/shared";
@@ -136,6 +137,59 @@ export async function completeUploadAction(
     return { ok: true as const, mediaItemId: item.id };
   } catch (err) {
     return { ok: false as const, error: err instanceof Error ? err.message : "Upload failed" };
+  }
+}
+
+/**
+ * Turns a sideways file a quarter turn clockwise.
+ *
+ * Anybody in the vlog may do this, unlike pulling a frame. Pulling destroys
+ * somebody else's upload; this repairs it, it is visible to everyone, and three
+ * more taps put it back — and the person who notices a shot is on its side is
+ * whoever happens to be voting, not whoever uploaded it hours ago.
+ *
+ * The turn is computed from the stored value rather than sent by the browser,
+ * so two people tapping at once can't land on a disagreement about where it
+ * started. No `syncCut`: which way up a shot is has no bearing on whether it's
+ * in the film or where.
+ */
+export async function rotateMediaAction(slug: string, mediaItemId: string) {
+  try {
+    const session = await requireMemberBySlug(slug);
+
+    if (!isWorkingState(session.vlog.state)) {
+      return { ok: false as const, error: "This vlog is finished — nothing can be changed now" };
+    }
+
+    const [item] = await db
+      .select()
+      .from(mediaItems)
+      .where(and(eq(mediaItems.id, mediaItemId), eq(mediaItems.vlogId, session.vlog.id)))
+      .limit(1);
+
+    if (!item) return { ok: false as const, error: "That shot isn't here any more" };
+
+    const rotation = nextRotation(item.rotation);
+    await db.update(mediaItems).set({ rotation }).where(eq(mediaItems.id, item.id));
+
+    emitToVlog(session.vlog.id, "media:updated", {
+      mediaItemId: item.id,
+      status: item.status,
+      thumbnailKey: item.thumbnailKey,
+      proxyKey: item.proxyKey,
+      durationSeconds: item.durationSeconds,
+      width: item.width,
+      height: item.height,
+      capturedAt: item.capturedAt ? item.capturedAt.toISOString() : null,
+    });
+    revalidatePath(`/v/${slug}`);
+
+    return { ok: true as const, rotation };
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: err instanceof Error ? err.message : "That didn't turn — try again",
+    };
   }
 }
 

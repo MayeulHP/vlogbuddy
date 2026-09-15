@@ -1,12 +1,23 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, db, eq, mediaItems, renderJobs, timelines, vlogs } from "@vlogbuddy/db";
+import {
+  and,
+  db,
+  eq,
+  getRenderSettings,
+  mediaItems,
+  renderJobs,
+  timelines,
+  vlogs,
+} from "@vlogbuddy/db";
 import {
   applyTimelineOp,
   emptyTimeline,
+  frameFor,
   isWorkingState,
   normalizeTimeline,
+  timelineDuration,
   timelineOpSchema,
   type TimelineOp,
 } from "@vlogbuddy/shared";
@@ -171,6 +182,81 @@ export async function applyTimelineOpAction(slug: string, op: unknown) {
     return { ok: true as const, revision: result.revision, timeline: result.doc };
   } catch (err) {
     return { ok: false as const, error: err instanceof Error ? err.message : "Edit failed" };
+  }
+}
+
+/**
+ * What sending this to the lab would actually produce, and what it would cost
+ * everyone else.
+ *
+ * A render is the one action left that takes the whole vlog away from the
+ * crew — it flips the state to `export` and locks every room but the screening
+ * one until FFmpeg is done. That deserves to be read before it's done rather
+ * than discovered afterwards, and the format is the operator's setting, not
+ * something the person pressing the button chose or can see anywhere else.
+ *
+ * Not creator-gated: anyone may look at what a render would make. Only
+ * `startRenderAction` decides who may cause one.
+ */
+export async function renderPreflightAction(slug: string) {
+  try {
+    const session = await requireMemberBySlug(slug);
+
+    const [settings, [row], sources] = await Promise.all([
+      getRenderSettings(),
+      db.select().from(timelines).where(eq(timelines.vlogId, session.vlog.id)).limit(1),
+      db
+        .select({
+          id: mediaItems.id,
+          status: mediaItems.status,
+          durationSeconds: mediaItems.durationSeconds,
+        })
+        .from(mediaItems)
+        .where(eq(mediaItems.vlogId, session.vlog.id)),
+    ]);
+
+    const doc = row ? normalizeTimeline(row.doc) : null;
+    if (!doc || doc.clips.length === 0) {
+      return { ok: false as const, error: "There's nothing on the timeline yet" };
+    }
+
+    const durations: Record<string, number | null> = {};
+    for (const item of sources) durations[item.id] = item.durationSeconds;
+
+    // The same readiness question the render asks, so the dialog can warn
+    // before the click rather than rejecting after it.
+    const ready = new Set(sources.filter((m) => m.status === "ready").map((m) => m.id));
+    const notReady = new Set(
+      [
+        ...doc.clips.map((c) => c.mediaItemId),
+        ...doc.layers.map((l) => l.mediaItemId),
+        ...doc.audio.flatMap((t) => (t.mediaItemId ? [t.mediaItemId] : [])),
+      ].filter((id) => !ready.has(id)),
+    ).size;
+
+    // The shape is the vlog's, the size is the operator's — the person about to
+    // press print has no other way to see either.
+    const { width, height } = frameFor(session.vlog.format, settings.renderHeight);
+
+    return {
+      ok: true as const,
+      spec: {
+        format: session.vlog.format,
+        width,
+        height,
+        fps: settings.renderFps,
+        durationSeconds: timelineDuration(doc, durations),
+        clips: doc.clips.length,
+        layers: doc.layers.length,
+        tracks: doc.audio.filter((t) => !t.muted).length,
+        notReady,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false as const,
+      error: err instanceof Error ? err.message : "Couldn't read the cut",
+    };
   }
 }
 

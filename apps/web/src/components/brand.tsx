@@ -53,6 +53,7 @@ export function SectionHead({
   note,
   right,
   tone = "paper",
+  size = "lg",
   className,
 }: {
   eyebrow: string;
@@ -60,9 +61,17 @@ export function SectionHead({
   note?: React.ReactNode;
   right?: React.ReactNode;
   tone?: "paper" | "ink";
+  /**
+   * Only the first block on a page earns a Bodoni head. Below it, `sm` keeps
+   * the mono eyebrow and drops the title to the same 13px as the note — four
+   * 32px heads down one page read as four chapters of vocabulary to learn
+   * before you can vote.
+   */
+  size?: "lg" | "sm";
   className?: string;
 }) {
   const dark = tone === "ink";
+  const small = size === "sm";
   return (
     <div
       className={cn(
@@ -76,23 +85,37 @@ export function SectionHead({
           <span className="h-1 w-1 bg-signal-500" aria-hidden />
           {eyebrow}
         </p>
-        <h2
-          className={cn(
-            "headline mt-1 text-[1.7rem] sm:text-[2rem]",
-            dark ? "text-paper-100" : "text-ink-900",
-          )}
-        >
-          {title}
-        </h2>
-        {note && (
-          <p
-            className={cn(
-              "mt-1 max-w-2xl text-[13px] leading-snug",
-              dark ? "text-ink-400" : "text-ink-600",
+        {small ? (
+          <p className="mt-1 max-w-2xl text-[13px] leading-snug">
+            <span className={dark ? "text-paper-100" : "text-ink-900"}>{title}</span>
+            {note && (
+              <>
+                {" "}
+                <span className={dark ? "text-ink-400" : "text-ink-600"}>{note}</span>
+              </>
             )}
-          >
-            {note}
           </p>
+        ) : (
+          <>
+            <h2
+              className={cn(
+                "headline mt-1 text-[1.7rem] sm:text-[2rem]",
+                dark ? "text-paper-100" : "text-ink-900",
+              )}
+            >
+              {title}
+            </h2>
+            {note && (
+              <p
+                className={cn(
+                  "mt-1 max-w-2xl text-[13px] leading-snug",
+                  dark ? "text-ink-400" : "text-ink-600",
+                )}
+              >
+                {note}
+              </p>
+            )}
+          </>
         )}
       </div>
       {/*
@@ -152,7 +175,7 @@ export function EmptyFrames({
           <span
             className={cn(
               "absolute bottom-1 left-1 font-mono text-2xs tabular-nums",
-              dark ? "text-ink-500" : "text-ink-500/70",
+              dark ? "text-ink-400" : "text-ink-600",
             )}
           >
             {String(i + 1).padStart(2, "0")}

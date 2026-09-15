@@ -17,6 +17,13 @@
   --hair: rgba(17, 19, 21, 0.15);
   --hair-strong: rgba(17, 19, 21, 0.3);
   --hair-dark: rgba(240, 240, 236, 0.15);
+
+  /*
+   * The keyboard's grease pencil. Scarlet reads on paper and vanishes on ink,
+   * so the ring is a variable rather than a colour: the ink rooms re-point it
+   * once and everything inside them inherits the right one.
+   */
+  --focus-ring: theme("colors.signal.600");
 }
 
 html {
@@ -54,12 +61,50 @@ body {
   color: theme("colors.paper.50");
 }
 
-/* Film grain over the whole page. Dialled low enough to read as paper tooth. */
+@layer base {
+  /*
+   * Nothing in this design had a focus state, and a UA ring on near-black is
+   * no ring at all — the dark rooms were simply unnavigable without a mouse.
+   * One rule for everything that takes focus, so a control only needs its own
+   * `:focus-visible` when it wants a different colour, not to have one at all.
+   * `:focus-visible` and not `:focus`: a clicked button should not sprout a
+   * ring, and the keyboard should never lose one.
+   */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  /*
+   * The ink rooms. There is no marker on them other than the ground they
+   * paint — the cut, the screening room and the full-screen overlays are all
+   * ordinary divs — so the background utility is the hook, and the ring flips
+   * to the lighter scarlet for everything inside.
+   */
+  [class*="bg-ink-9"],
+  [class*="bg-ink-8"],
+  [class*="bg-black"],
+  .slab {
+    --focus-ring: theme("colors.signal.400");
+  }
+}
+
+/*
+ * Film grain over the whole page. Dialled low enough to read as paper tooth.
+ *
+ * It sits under the chrome rather than over it. At z-60 a multiply layer was
+ * veiling the sticky masthead (z-30), the bottom rail (z-40) and every overlay,
+ * costing each of them contrast they could not spare; dropping below them keeps
+ * the tooth at full strength everywhere it actually reads — on the paper — and
+ * only takes it off the parts that are floating above the page anyway. The
+ * alternative, thinning the opacity, would have paid for the chrome by making
+ * the whole stock flatter.
+ */
 .grain::after {
   content: "";
   position: fixed;
   inset: -50%;
-  z-index: 60;
+  z-index: 25;
   pointer-events: none;
   opacity: 0.32;
   mix-blend-mode: multiply;
@@ -88,9 +133,13 @@ body {
     font-variation-settings: "opsz" 12;
   }
 
-  /* Uppercase mono micro-label. The workhorse of the whole interface. */
+  /*
+   * Uppercase mono micro-label. The workhorse of the whole interface — and at
+   * 10px, the thing least able to afford a grey that only just clears the
+   * background. Ink 600 rather than 500 buys it 7.2:1 on paper.
+   */
   .eyebrow {
-    @apply font-mono text-2xs uppercase tracking-label text-ink-500;
+    @apply font-mono text-2xs uppercase tracking-label text-ink-600;
   }
   .eyebrow-light {
     @apply font-mono text-2xs uppercase tracking-label text-ink-400;
@@ -232,7 +281,7 @@ body {
            hover:border-ink-900 hover:bg-ink-900 hover:text-paper-50 active:translate-y-px;
   }
   .btn-quiet {
-    @apply btn border-transparent bg-transparent text-ink-500 hover:text-signal-600;
+    @apply btn border-transparent bg-transparent text-ink-600 hover:text-signal-600;
   }
   .btn-danger {
     @apply btn border-signal-700/40 bg-signal-100 text-signal-800 hover:border-signal-700 hover:bg-signal-200;
@@ -246,16 +295,46 @@ body {
     @apply btn border-transparent bg-transparent text-ink-400 hover:text-signal-400;
   }
 
-  /* Inputs read like a form on a call sheet: rule underneath, no box. */
+  /*
+   * Buttons carry the ring themselves rather than leaning on the inherited
+   * default, because a button is the one control that lands on both stocks —
+   * a dark-room button sitting on a paper panel would otherwise inherit the
+   * wrong scarlet from whatever it happens to be nested in.
+   */
+  .btn:focus-visible {
+    outline: 2px solid theme("colors.signal.600");
+    outline-offset: 2px;
+  }
+  .btn-outline-dark:focus-visible,
+  .btn-quiet-dark:focus-visible {
+    outline-color: theme("colors.signal.400");
+  }
+
+  /*
+   * Inputs read like a form on a call sheet: rule underneath, no box.
+   *
+   * The underline turning scarlet is the *aesthetic* of focus, not an
+   * accessible indicator — it is a 1px change on one edge. The ring is what
+   * a keyboard actually needs, so it comes back on top of the `outline-none`
+   * that the underline treatment asked for.
+   */
   .field {
     @apply w-full border-0 border-b border-[color:var(--hair-strong)] bg-transparent px-0 py-2
            font-sans text-sm text-ink-900 transition-colors
-           placeholder:text-ink-400 focus:border-signal-600 focus:outline-none focus:ring-0;
+           placeholder:text-ink-600 focus:border-signal-600 focus:outline-none focus:ring-0;
   }
   .field-dark {
     @apply w-full border-0 border-b border-[color:var(--hair-dark)] bg-transparent px-0 py-2
            text-sm text-paper-100 transition-colors
-           placeholder:text-ink-500 focus:border-signal-500 focus:outline-none focus:ring-0;
+           placeholder:text-ink-400 focus:border-signal-500 focus:outline-none focus:ring-0;
+  }
+  .field:focus-visible {
+    outline: 2px solid theme("colors.signal.600");
+    outline-offset: 2px;
+  }
+  .field-dark:focus-visible {
+    outline: 2px solid theme("colors.signal.400");
+    outline-offset: 2px;
   }
   .field-label {
     @apply eyebrow mb-1 block;
@@ -275,8 +354,13 @@ body {
   .tag-dark {
     @apply tag border-[color:var(--hair-dark)] bg-ink-850 text-ink-300;
   }
+  /*
+   * Grease-pencil yellow on grease-pencil yellow is 3.6:1 — the tape reads,
+   * the writing on it doesn't. The ground and the border keep the tag yellow;
+   * only the hand that wrote on it becomes ink.
+   */
   .tag-tape {
-    @apply tag border-tape-500/45 bg-tape-200 text-tape-600;
+    @apply tag border-tape-500/45 bg-tape-200 text-ink-700;
   }
   .tag-leader {
     @apply tag border-leader-500/40 bg-leader-400/15 text-leader-600;
@@ -292,8 +376,9 @@ body {
   .notice {
     @apply border border-signal-600/35 bg-signal-100 px-3 py-2 font-mono text-[11px] text-signal-800;
   }
+  /* Same tape, same reason: the ground stays yellow, the writing turns to ink. */
   .notice-tape {
-    @apply border border-tape-500/40 bg-tape-200/70 px-3 py-2 font-mono text-[11px] leading-relaxed text-tape-600;
+    @apply border border-tape-500/40 bg-tape-200/70 px-3 py-2 font-mono text-[11px] leading-relaxed text-ink-700;
   }
 
   /* Section head: eyebrow + serif title + rule, used on every block. */
@@ -325,17 +410,46 @@ body {
   .slider-dark {
     @apply bg-ink-700;
   }
+  /*
+   * The ring goes round the handle, not the input: the track is a 3px rule
+   * running the width of a panel, and a box drawn round that reads as a border
+   * on the panel rather than as "you are holding this". Vendor thumb selectors
+   * can't share a rule — one browser not recognising the other's pseudo-element
+   * throws the whole thing away.
+   */
+  .slider:focus-visible {
+    outline: none;
+  }
+  .slider:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid theme("colors.signal.600");
+    outline-offset: 2px;
+  }
+  .slider:focus-visible::-moz-range-thumb {
+    outline: 2px solid theme("colors.signal.600");
+    outline-offset: 2px;
+  }
+  .slider-dark:focus-visible::-webkit-slider-thumb {
+    outline-color: theme("colors.signal.400");
+  }
+  .slider-dark:focus-visible::-moz-range-thumb {
+    outline-color: theme("colors.signal.400");
+  }
 
   /*
    * The three grease-pencil marks. They sit on media, so they can never be a
    * full 44px square on a contact-sheet frame — but a fingertip still needs
    * more than the 18px a mouse is happy with.
+   *
+   * Each cell is one glyph wide now rather than a run of up to three dots, so
+   * the widths no longer stagger themselves: a min-width keeps the pass and
+   * the three marks an even row, and gives the crew-weight tint a shape worth
+   * reading at thumbnail size.
    */
   .mark-sm {
-    @apply px-1.5 py-[3px] text-[9px];
+    @apply min-w-[22px] px-1.5 py-[3px] text-[10px];
   }
   .mark-md {
-    @apply px-2 py-1 text-[11px];
+    @apply min-w-[26px] px-2 py-1 text-[11px];
   }
 
   /* Checkboxes keep the square language. */
@@ -354,6 +468,13 @@ body {
   }
   .check-dark {
     @apply border-[color:var(--hair-dark)];
+  }
+  .check:focus-visible {
+    outline: 2px solid theme("colors.signal.600");
+    outline-offset: 2px;
+  }
+  .check-dark:focus-visible {
+    outline-color: theme("colors.signal.400");
   }
 }
 
@@ -411,7 +532,7 @@ body {
   .mark-sm {
     min-height: 30px;
     min-width: 34px;
-    @apply px-2 text-[11px];
+    @apply px-2 text-[12px];
   }
   .mark-md {
     min-height: 44px;

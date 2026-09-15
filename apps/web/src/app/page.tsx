@@ -73,7 +73,7 @@ export default function HomePage() {
                 </p>
               </div>
               <div className="border-t border-[color:var(--hair)] bg-paper-100 px-5 py-3">
-                <p className="font-mono text-2xs leading-relaxed text-ink-500">
+                <p className="font-mono text-2xs leading-relaxed text-ink-600">
                   Run this box yourself?{" "}
                   <Link href="/admin" className="text-signal-600 underline-offset-2 hover:underline">
                     Projection booth →
@@ -95,7 +95,7 @@ export default function HomePage() {
             <EmptyFrames count={9} tone="ink" className="my-2" />
             <Perfs tone="light" />
           </div>
-          <p className="mt-3 max-w-md font-mono text-2xs leading-relaxed text-ink-500">
+          <p className="mt-3 max-w-md font-mono text-2xs leading-relaxed text-ink-600">
             Nine empty frames. Yours will have the bad one where everyone blinked, the good one
             nobody noticed, and the one that ends up first.
           </p>

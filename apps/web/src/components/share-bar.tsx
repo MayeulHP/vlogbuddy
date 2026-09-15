@@ -31,8 +31,18 @@ export function ShareBar({ shareUrl }: { shareUrl: string }) {
   }
 
   return (
-    <button onClick={share} className="btn-outline whitespace-nowrap" title={shareUrl}>
-      {copied ? "✓ Link copied" : "Invite crew"}
-    </button>
+    <>
+      <button onClick={share} className="btn-outline whitespace-nowrap" title={shareUrl}>
+        {copied ? "✓ Link copied" : "Invite crew"}
+      </button>
+      {/*
+        The button relabelling itself is the whole confirmation, and a label
+        that changes under the cursor isn't reliably read back — so the good
+        news gets said out loud too.
+      */}
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {copied ? "Link copied" : ""}
+      </span>
+    </>
   );
 }

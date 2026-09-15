@@ -9,6 +9,7 @@ import {
   isWorkingState,
   type ReactionTier,
   type TimelineDoc,
+  type VideoFormat,
   type VlogState,
   type WorkspaceTab,
 } from "@vlogbuddy/shared";
@@ -32,6 +33,7 @@ export interface VlogShellProps {
     shareSlug: string;
     state: VlogState;
     scoreThreshold: number;
+    format: VideoFormat;
   };
   member: { id: string; displayName: string; role: "creator" | "friend" };
   members: { id: string; displayName: string; role: "creator" | "friend" }[];
@@ -43,6 +45,10 @@ export interface VlogShellProps {
   latestRender: RenderJob | null;
   publishedRender: (RenderJob & { url: string; downloadUrl: string }) | null;
   shareUrl: string;
+  /** The operator's render size, read as the film's shorter edge. */
+  renderShortEdge: number;
+  /** The rate the lab prints at — the bench's frame-sized nudges use it. */
+  renderFps: number;
   ytAudioEnabled: boolean;
   immichConnection: PublicImmichConnection | null;
 }
@@ -72,6 +78,8 @@ export function VlogShell(props: VlogShellProps) {
   useSocketEvent(socket, "selection:reordered", refresh);
   useSocketEvent(socket, "music:moved", refresh);
   useSocketEvent(socket, "vlog:threshold", refresh);
+  // Changing the shape re-proportions every bench in the room.
+  useSocketEvent(socket, "vlog:format", refresh);
   // The cut engine rebuilds the timeline whenever a vote moves the line.
   useSocketEvent(socket, "timeline:sync", refresh);
 
@@ -105,8 +113,23 @@ export function VlogShell(props: VlogShellProps) {
 
   const dark = effectiveTab !== "gather";
 
+  /**
+   * The bench is a fixed-viewport room: picture, strip and inspector all on
+   * screen at once, nothing below the fold. The page itself stops scrolling and
+   * the column flex hands the editor whatever the (sticky, and therefore
+   * self-measuring) masthead and the footer leave behind — no header height is
+   * written down anywhere, so it can't go stale. Phones keep the stacked flow.
+   */
+  const fixed = effectiveTab === "edit";
+
   return (
-    <div className={cn("flex min-h-screen flex-col", dark ? "bg-ink-900" : "bg-paper-100")}>
+    <div
+      className={cn(
+        "flex min-h-screen flex-col",
+        fixed && "md:h-dvh md:min-h-0 md:overflow-hidden",
+        dark ? "bg-ink-900" : "bg-paper-100",
+      )}
+    >
       {/* ---------- masthead: always paper, whatever room you're in ---------- */}
       <header className="pt-safe px-safe sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-7">
@@ -161,7 +184,12 @@ export function VlogShell(props: VlogShellProps) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-7 sm:py-7">
+      <main
+        className={cn(
+          "mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-7 sm:py-7",
+          fixed && "md:min-h-0 md:overflow-hidden md:py-4",
+        )}
+      >
         {effectiveTab === "gather" && (
           <GatherView
             slug={vlog.shareSlug}
@@ -171,6 +199,7 @@ export function VlogShell(props: VlogShellProps) {
             reactionTiers={reactionTiers}
             memberId={member.id}
             crew={props.members.length}
+            onOpenEditor={() => setTab("edit")}
             scoreThreshold={vlog.scoreThreshold}
             ytAudioEnabled={props.ytAudioEnabled}
             immichConnection={props.immichConnection}
@@ -189,6 +218,9 @@ export function VlogShell(props: VlogShellProps) {
             socket={socket}
             isCreator={isCreator}
             memberId={member.id}
+            format={vlog.format}
+            renderShortEdge={props.renderShortEdge}
+            renderFps={props.renderFps}
             onBackToGather={() => setTab("gather")}
           />
         )}
@@ -219,7 +251,7 @@ export function VlogShell(props: VlogShellProps) {
           <span
             className={cn(
               "flex items-center gap-2 font-mono text-2xs uppercase tracking-label",
-              dark ? "text-ink-400" : "text-ink-500",
+              dark ? "text-ink-400" : "text-ink-600",
             )}
           >
             <span
@@ -233,7 +265,7 @@ export function VlogShell(props: VlogShellProps) {
           <span
             className={cn(
               "font-mono text-2xs uppercase tracking-label",
-              dark ? "text-ink-500" : "text-ink-400",
+              dark ? "text-ink-400" : "text-ink-600",
             )}
           >
             ROLLCALL · {vlog.shareSlug}

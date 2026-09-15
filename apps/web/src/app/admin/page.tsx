@@ -124,7 +124,7 @@ function Figure({
       >
         {value}
       </dd>
-      <p className="mt-0.5 font-mono text-2xs text-ink-500">{note}</p>
+      <p className="mt-0.5 font-mono text-2xs text-ink-600">{note}</p>
     </div>
   );
 }

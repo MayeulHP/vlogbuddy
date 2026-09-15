@@ -72,7 +72,7 @@ export async function uploadFileStreaming(
 
 export function buildStorageKey(
   vlogId: string,
-  kind: "original" | "proxy" | "thumb" | "audio" | "render",
+  kind: "original" | "proxy" | "thumb" | "filmstrip" | "audio" | "render",
   id: string,
   filename: string,
 ) {

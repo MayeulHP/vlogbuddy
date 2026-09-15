@@ -1,13 +1,18 @@
 import { z } from "zod";
 import {
   AUTO_FIELDS,
+  CLIP_LOOKS,
   DEFAULT_PHOTO_DURATION,
+  MAX_CLIP_SPEED,
+  MIN_CLIP_SPEED,
   DEFAULT_TRANSITION_DURATION,
+  MIN_CLIP_SPAN,
   PACE_PRESETS,
   TRANSITIONS,
   overlapsPrevious,
   type AutoField,
 } from "./constants";
+import { CLIP_FITS, CLIP_FIT_CHOICES, DEFAULT_FIT_POLICY } from "./frame";
 
 /**
  * The timeline document: the single authoritative description of the final cut.
@@ -68,6 +73,18 @@ export const directorSettingsSchema = z.object({
    * somebody drops in music is a surprise nobody asked for.
    */
   beatSnap: z.boolean().default(false),
+  /**
+   * What happens to a shot that isn't the shape of the film. Not the
+   * auto-cut's decision — it never writes this and never reads it — but it is
+   * the film's one answer to a question every clip asks, and it rides on the
+   * document so there's no column for it and nothing to migrate.
+   *
+   * `blur` by default because the mismatch is the common case with four
+   * phones in the crew: it reads as a deliberate look rather than a broken
+   * frame, and unlike `fill` it never quietly throws away the sides of
+   * somebody's shot. Cropping should be something you chose.
+   */
+  fitPolicy: z.enum(CLIP_FITS).default(DEFAULT_FIT_POLICY),
 });
 export type DirectorSettings = z.infer<typeof directorSettingsSchema>;
 
@@ -80,6 +97,23 @@ export const clipSchema = z.object({
   trimEnd: z.number().min(0).nullable().default(null),
   /** Photos only: how long the still holds on screen. */
   duration: z.number().positive().default(DEFAULT_PHOTO_DURATION),
+  /**
+   * How this shot fills a frame it doesn't match. `auto` — the default, and
+   * what every document written before this parses as — defers to the film's
+   * policy, and only where there's actually a mismatch. See `resolveFit`:
+   * the answer is never stored, because the shot's dimensions arrive after
+   * the upload does.
+   */
+  fit: z.enum(CLIP_FIT_CHOICES).default("auto"),
+  /**
+   * How fast the shot plays. Trims stay in source seconds — a trim is a
+   * statement about the file, not about the film — so the *on-screen* length
+   * is the trimmed window divided by this, and every timing helper gets that
+   * from `clipDuration`. Photos have no source clock, so they ignore it.
+   */
+  speed: z.number().min(MIN_CLIP_SPEED).max(MAX_CLIP_SPEED).default(1),
+  /** A grade over the whole shot. See `LOOK_FILTERS`. */
+  look: z.enum(CLIP_LOOKS).default("none"),
   /** Transition *into* this clip from the previous one. */
   transitionIn: transitionSchema.default("cut"),
   transitionDuration: z.number().min(0).max(5).default(DEFAULT_TRANSITION_DURATION),
@@ -103,6 +137,17 @@ export const AUTO_FIELD_FOR: Record<keyof Omit<Clip, "id" | "auto">, AutoField |
   trimStart: "timing",
   trimEnd: "timing",
   duration: "timing",
+  // Framing is a taste decision the auto-cut has no view on, like which media
+  // a clip points at: it neither sets `fit` nor loses a claim when somebody
+  // does. A re-cut leaves an overridden shot framed the way it was left.
+  fit: null,
+  // Speed is timing: it is the one thing besides a trim that changes how long
+  // a shot is on screen, so ramping a shot by hand takes its length out of the
+  // auto-cut's hands for good. The director keeps planning in source seconds
+  // and never has to know this field exists.
+  speed: "timing",
+  // Like `fit`, a taste decision the auto-cut has no view on.
+  look: null,
   transitionIn: "transition",
   transitionDuration: "transition",
   volume: "audio",
@@ -217,12 +262,38 @@ export function normalizeTimeline(doc: unknown): TimelineDoc {
   return parsed.version === 2 ? parsed : { ...parsed, version: 2 };
 }
 
-/** Effective on-screen duration of a clip, accounting for trims. */
+/**
+ * Source times land on the same 2dp grid the trim handles write, so a value the
+ * reducer produces compares equal to one a hand-drag produced — and survives
+ * the round-trip through jsonb that decides whether the document changed.
+ */
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Effective on-screen duration of a clip, accounting for trims and speed.
+ *
+ * The single place the source clock is converted to the film's, which is why
+ * `timelineDuration`, `clipStartTimes`, the director's layout pass, the strip
+ * and the renderer all agree without any of them knowing about `speed`.
+ */
 export function clipDuration(clip: Clip, sourceDuration?: number | null): number {
   if (clip.kind === "photo") return clip.duration;
   const end = clip.trimEnd ?? sourceDuration ?? null;
-  if (end === null) return clip.duration;
-  return Math.max(0.05, end - clip.trimStart);
+  const span = end === null ? clip.duration : Math.max(0.05, end - clip.trimStart);
+  return Math.max(0.05, round3(span / clipSpeed(clip)));
+}
+
+/** A clip's playback rate, ignored for stills. Never zero. */
+export function clipSpeed(clip: Clip): number {
+  if (clip.kind === "photo") return 1;
+  return clip.speed > 0 ? clip.speed : 1;
+}
+
+/** Generated numbers land on 3dp so they round-trip through jsonb unchanged. */
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
 }
 
 /**
@@ -364,6 +435,9 @@ export function defaultClipFor(entry: CutEntry): Clip {
     trimStart: 0,
     trimEnd: isVideo ? entry.durationSeconds : null,
     duration: isVideo ? entry.durationSeconds ?? 5 : DEFAULT_PHOTO_DURATION,
+    fit: "auto",
+    speed: 1,
+    look: "none",
     transitionIn: "cut",
     transitionDuration: DEFAULT_TRANSITION_DURATION,
     volume: 1,
@@ -376,21 +450,31 @@ export function defaultClipFor(entry: CutEntry): Clip {
 }
 
 /**
- * Rebuilds `clips` to match `cut`, reusing the existing clip for any media that
+ * Rebuilds `clips` to match `cut`, reusing the existing clips for any media that
  * is still in. Returns the *same object* when nothing would change, so callers
  * can skip a write and avoid churning revisions on every vote.
+ *
+ * One media item can hold *several* clips — `clip.split` cuts a shot in two and
+ * both halves point at the same file. So the reuse is by group, in document
+ * order, and a default clip is only invented when a cut entry has no clips at
+ * all. Keying one clip per media item here is what would make a split half
+ * silently disappear on the next vote.
  *
  * Only the base track is reconciled — the same photo can be in the cut *and*
  * pinned over a later shot as a layer, and the vote has no opinion about the
  * second one.
  */
 export function reconcileClips(doc: TimelineDoc, cut: CutEntry[]): TimelineDoc {
-  const existing = new Map<string, Clip>();
+  const existing = new Map<string, Clip[]>();
   for (const clip of doc.clips) {
-    if (!existing.has(clip.mediaItemId)) existing.set(clip.mediaItemId, clip);
+    const group = existing.get(clip.mediaItemId);
+    if (group) group.push(clip);
+    else existing.set(clip.mediaItemId, [clip]);
   }
 
-  const clips = cut.map((entry) => existing.get(entry.mediaItemId) ?? defaultClipFor(entry));
+  const clips = cut.flatMap(
+    (entry) => existing.get(entry.mediaItemId) ?? [defaultClipFor(entry)],
+  );
 
   const unchanged =
     clips.length === doc.clips.length && clips.every((clip, i) => clip === doc.clips[i]);
@@ -408,6 +492,19 @@ export const timelineOpSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("clip.remove"), clipId: z.string() }),
   z.object({ type: z.literal("clip.move"), clipId: z.string(), toIndex: z.number().int().min(0) }),
   z.object({ type: z.literal("clip.update"), clipId: z.string(), patch: clipSchema.partial().omit({ id: true }) }),
+  /**
+   * Cut a shot in two at `at` seconds into what it plays for, so the middle can
+   * be dropped or the halves swapped. The new id is the *caller's* to mint:
+   * the reducer runs three times over the same op — optimistically in the
+   * browser, authoritatively in the socket handler, and again in server actions
+   * — and an id generated inside it would come out different each time.
+   */
+  z.object({
+    type: z.literal("clip.split"),
+    clipId: z.string(),
+    at: z.number().positive(),
+    newClipId: z.string(),
+  }),
   z.object({ type: z.literal("title.add"), clipId: z.string(), title: titleOverlaySchema }),
   z.object({ type: z.literal("title.remove"), clipId: z.string(), titleId: z.string() }),
   z.object({
@@ -477,6 +574,65 @@ export function applyTimelineOp(doc: TimelineDoc, op: TimelineOp): TimelineDoc {
       next.clips = next.clips.map((c) =>
         c.id === op.clipId ? clearAutoFor({ ...c, ...op.patch }, patched) : c,
       );
+      break;
+    }
+    case "clip.split": {
+      const index = next.clips.findIndex((c) => c.id === op.clipId);
+      if (index === -1) break;
+      const clip = doc.clips[index];
+
+      // A video whose out-point is still open hasn't been probed yet, so there
+      // is no second half to describe. Leave it alone rather than guessing.
+      // On-screen seconds, like `at` and like a title's `start` — so a shot
+      // running at 2× splits where the playhead is, not where the file is.
+      const span =
+        clip.kind === "photo"
+          ? clip.duration
+          : clip.trimEnd === null
+            ? null
+            : round2((clip.trimEnd - clip.trimStart) / clipSpeed(clip));
+      if (span === null) return doc;
+
+      const at = round2(op.at);
+      // Too close to either edge and one half would be a flash frame. The doc
+      // comes back untouched so an ill-aimed click is simply a no-op.
+      if (at < MIN_CLIP_SPAN || span - at < MIN_CLIP_SPAN) return doc;
+
+      const headTitles = clip.titles.filter((t) => t.start < at);
+      const tailTitles = clip.titles
+        .filter((t) => t.start >= at)
+        .map((t) => ({ ...t, start: round2(t.start - at) }));
+      // Moving a title is a hand edit of the same kind as the split itself.
+      const titlesMoved = tailTitles.length > 0;
+      const touched = ["trimStart", "trimEnd", "duration", ...(titlesMoved ? ["titles"] : [])];
+
+      // Back to the file's clock to place the cut in the source.
+      const cutAt = round2(clip.trimStart + at * clipSpeed(clip));
+      const head = clearAutoFor(
+        {
+          ...clip,
+          ...(clip.kind === "video" ? { trimEnd: cutAt } : {}),
+          duration: at,
+          titles: headTitles,
+        },
+        touched,
+      );
+      const tail = clearAutoFor(
+        {
+          ...clip,
+          id: op.newClipId,
+          ...(clip.kind === "video" ? { trimStart: cutAt } : {}),
+          duration: round2(span - at),
+          // The join was one continuous shot a moment ago; dissolving a shot
+          // into itself is never what splitting it meant.
+          transitionIn: "cut" as const,
+          transitionDuration: DEFAULT_TRANSITION_DURATION,
+          titles: tailTitles,
+        },
+        touched,
+      );
+
+      next.clips.splice(index, 1, head, tail);
       break;
     }
     case "title.add": {

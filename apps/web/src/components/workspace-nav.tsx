@@ -4,7 +4,6 @@ import {
   WORKSPACE_TABS,
   WORKSPACE_TAB_BLURBS,
   WORKSPACE_TAB_LABELS,
-  WORKSPACE_TAB_REELS,
   type VlogState,
   type WorkspaceTab,
 } from "@vlogbuddy/shared";
@@ -27,6 +26,11 @@ import { cn } from "@/lib/cn";
  * would put its contents. On a phone the masthead is already eating the top of
  * a small screen and the thumb is at the bottom, so the same three rooms become
  * a bottom bar — see `variant`.
+ *
+ * The rooms you're *not* in sit at ink 500/600, not 400/500. At 9px mono on
+ * paper the lighter greys were down at 2.7:1 and read as disabled rather than
+ * as available; what says which room you're in was never how faint the others
+ * are — it's the scarlet and the grease-pencil rule under the label.
  */
 export function WorkspaceNav({
   tab,
@@ -46,7 +50,7 @@ export function WorkspaceNav({
   const locked = rendering || state === "published";
   const lockReason = rendering
     ? "Locked while the film renders"
-    : "This cut is locked — reopen it from Final Cut to keep working";
+    : "This cut is locked — reopen it from Watch to keep working";
 
   const badge: Record<WorkspaceTab, string | undefined> = {
     gather: counts.unrated > 0 ? `${counts.unrated} to mark` : undefined,
@@ -103,16 +107,8 @@ export function WorkspaceNav({
                 />
                 <span
                   className={cn(
-                    "font-mono text-[9px] uppercase tracking-label",
-                    active ? "text-signal-600" : "text-ink-400",
-                  )}
-                >
-                  {WORKSPACE_TAB_REELS[candidate]}
-                </span>
-                <span
-                  className={cn(
                     "display-sm text-[1.05rem] leading-none",
-                    active ? "text-ink-900" : "text-ink-500",
+                    active ? "text-ink-900" : "text-ink-600",
                   )}
                 >
                   {WORKSPACE_TAB_LABELS[candidate]}
@@ -123,7 +119,7 @@ export function WorkspaceNav({
                       "mt-0.5 border px-1 font-mono text-[9px] uppercase leading-[1.4] tracking-label",
                       active
                         ? "border-signal-600/40 bg-signal-100 text-signal-700"
-                        : "border-[color:var(--hair)] bg-paper-200 text-ink-500",
+                        : "border-[color:var(--hair)] bg-paper-200 text-ink-600",
                     )}
                   >
                     {mark}
@@ -159,16 +155,8 @@ export function WorkspaceNav({
             >
               <span
                 className={cn(
-                  "font-mono text-2xs uppercase tracking-label",
-                  active ? "text-signal-600" : "text-ink-400",
-                )}
-              >
-                {WORKSPACE_TAB_REELS[candidate]}
-              </span>
-              <span
-                className={cn(
                   "display-sm whitespace-nowrap text-[1.3rem] leading-none",
-                  active ? "text-ink-900" : "text-ink-500 group-hover:text-ink-800",
+                  active ? "text-ink-900" : "text-ink-600 group-hover:text-ink-900",
                 )}
               >
                 {WORKSPACE_TAB_LABELS[candidate]}
@@ -180,7 +168,7 @@ export function WorkspaceNav({
                     "ml-0.5 border px-1 font-mono text-2xs uppercase leading-[1.4] tracking-label",
                     active
                       ? "border-signal-600/40 bg-signal-100 text-signal-700"
-                      : "border-[color:var(--hair)] bg-paper-200 text-ink-500",
+                      : "border-[color:var(--hair)] bg-paper-200 text-ink-600",
                   )}
                 >
                   {mark}

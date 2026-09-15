@@ -19,8 +19,10 @@ WORKDIR /app
 # Its own stage so a dependency bump never re-runs apk or pip.
 FROM base AS system
 # ffmpeg does the actual video work. yt-dlp is only used when ENABLE_YT_AUDIO
-# is true (see the warning in .env.example).
-RUN apk add --no-cache ffmpeg python3 py3-pip font-noto \
+# is true (see the warning in .env.example). libheif-tools is what reads the
+# HEICs every recent iPhone shoots — Alpine's ffmpeg has no HEIF demuxer, and
+# without this a photo from an iPhone arrives as a card nobody can see.
+RUN apk add --no-cache ffmpeg python3 py3-pip font-noto libheif-tools \
     && pip3 install --break-system-packages --no-cache-dir yt-dlp
 
 # --- warm the store ---------------------------------------------------------

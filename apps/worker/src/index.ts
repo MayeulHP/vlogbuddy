@@ -1,6 +1,7 @@
 import PgBoss from "pg-boss";
-import { getRenderSettings } from "@vlogbuddy/db";
+import { db, eq, getRenderSettings, renderJobs, vlogs } from "@vlogbuddy/db";
 import { mkdir } from "node:fs/promises";
+import { notifyRenderProgress } from "./notify";
 import { env } from "./env";
 import { processMedia, type ProcessMediaJob } from "./jobs/process-media";
 import { extractAudio, type ExtractAudioJob } from "./jobs/extract-audio";
@@ -16,6 +17,45 @@ import {
   QUEUE_RENDER,
   setBoss,
 } from "./queue";
+
+/**
+ * Unsticks renders that were in flight when this process last died.
+ *
+ * A render job writes its own failure, which it cannot do if it was killed
+ * rather than thrown — the container restarted, the box lost power, the OOM
+ * killer picked the worker instead of FFmpeg. The row stays `rendering` and the
+ * vlog stays in `export`, which locks every room but the screening one and makes
+ * `startRenderAction` refuse ("a render is already in progress"). Nobody can get
+ * out of that from the app, which is the worst shape a failure can take.
+ *
+ * This assumes one worker, which is what compose runs: a second worker booting
+ * would call a live render abandoned.
+ */
+async function reclaimAbandonedRenders() {
+  const stuck = await db
+    .update(renderJobs)
+    .set({
+      status: "failed",
+      message: "Failed",
+      error: "The lab restarted while this was printing. Nothing was lost — send it again.",
+      finishedAt: new Date(),
+    })
+    .where(eq(renderJobs.status, "rendering"))
+    .returning({ id: renderJobs.id, vlogId: renderJobs.vlogId });
+
+  for (const job of stuck) {
+    await db.update(vlogs).set({ state: "open" }).where(eq(vlogs.id, job.vlogId));
+    // The browser is told the same way a live failure is, so anyone still
+    // watching the dial sees it stop rather than spin forever.
+    await notifyRenderProgress(job.vlogId, {
+      renderJobId: job.id,
+      status: "failed",
+      progress: 0,
+      error: "The lab restarted while this was printing. Nothing was lost — send it again.",
+    });
+    console.warn(`[worker] reclaimed abandoned render ${job.id}`);
+  }
+}
 
 async function main() {
   const e = env();
@@ -45,6 +85,8 @@ async function main() {
   }
 
   console.log("[worker] connected to queue");
+
+  await reclaimAbandonedRenders();
 
   // Media processing is IO-heavy but light on CPU; a few in parallel is fine.
   await boss.work<ProcessMediaJob>(
@@ -99,7 +141,7 @@ async function main() {
 
   const format = await getRenderSettings();
   console.log(
-    `[worker] ready — render ${format.renderHeight}p@${format.renderFps} ` +
+    `[worker] ready — render ${format.renderHeight}p short edge @${format.renderFps} ` +
       `(crf ${format.renderCrf}, ${format.renderPreset}; change it on /admin), ` +
       `yt-audio ${e.ENABLE_YT_AUDIO ? "ENABLED" : "disabled"}`,
   );

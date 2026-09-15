@@ -6,7 +6,16 @@ import path from "node:path";
 import { db, eq, mediaItems } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, downloadToFile, uploadFile } from "../storage";
-import { generateProxy, generateThumbnail, probe } from "../ffmpeg";
+import { needsDisplayCopy } from "@vlogbuddy/shared";
+import {
+  audioPeaks,
+  generateDisplayImage,
+  generateFilmstrip,
+  generateProxy,
+  generateThumbnail,
+  planFilmstrip,
+  probe,
+} from "../ffmpeg";
 import { analyzeBeats } from "../beats";
 import { notifyMediaUpdated } from "../notify";
 
@@ -49,23 +58,81 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
 
     let thumbnailKey: string | null = null;
     let proxyKey: string | null = null;
+    let filmstripKey: string | null = null;
+    let filmstripFrames: number | null = null;
+    let filmstripIntervalSeconds: number | null = null;
 
     // An uploaded track is as likely to end up the music bed as a YouTube
     // link, so it gets the same beat analysis. Best-effort: a file we can't
     // read a tempo off is simply a film the auto-cut won't cut to the music.
     const beats = isAudio ? await analyzeBeats(localOriginal) : null;
 
+    // The envelope the audio lane draws. Same best-effort footing as the beat
+    // grid: no peaks just means the lane stays the flat block it always was.
+    const peaks = isAudio ? await audioPeaks(localOriginal) : null;
+
+    /**
+     * A photo a browser can't decode gets a JPEG stand-in, and everything
+     * downstream derives from that rather than the original — including the
+     * thumbnail, whose own decode would fail for the same reason.
+     *
+     * It lands under the proxy key. `proxyKey` was only ever used by video, it
+     * is already presigned for every item, and "the browser-friendly version
+     * of this file" is exactly what a proxy is — so an iPhone's HEIC becomes
+     * viewable without a migration.
+     */
+    let still = localOriginal;
+    if (!isAudio && !isVideo && needsDisplayCopy(item.contentType)) {
+      const displayPath = path.join(workDir, "display.jpg");
+      try {
+        await generateDisplayImage(localOriginal, displayPath);
+        proxyKey = buildStorageKey(item.vlogId, "proxy", item.id, "display.jpg");
+        await uploadFile(proxyKey, displayPath, "image/jpeg");
+        still = displayPath;
+      } catch (err) {
+        console.warn(`[process-media] display copy failed for ${item.id}:`, (err as Error).message);
+      }
+    }
+
     // Audio has no frames to show; the UI renders an icon instead.
     if (!isAudio) {
       const thumbPath = path.join(workDir, "thumb.jpg");
       try {
         const seekTo = isVideo ? Math.min(1, (info?.durationSeconds ?? 2) / 2) : 0;
-        await generateThumbnail(localOriginal, thumbPath, isVideo, seekTo);
+        await generateThumbnail(still, thumbPath, isVideo, seekTo);
         thumbnailKey = buildStorageKey(item.vlogId, "thumb", item.id, "thumb.jpg");
         await uploadFile(thumbnailKey, thumbPath, "image/jpeg");
       } catch (err) {
         console.warn(`[process-media] thumbnail failed for ${item.id}:`, (err as Error).message);
       }
+    }
+
+    /**
+     * A photo with no thumbnail and no stand-in is one nobody can see, and
+     * marking it `ready` put a blank card in the pile that could never be
+     * judged and never explained itself. Better to say so.
+     */
+    if (!isAudio && !isVideo && !thumbnailKey && !proxyKey) {
+      const error = needsDisplayCopy(item.contentType)
+        ? "This box can't read HEIC photos yet. Export it as a JPEG and drop it in again."
+        : "We couldn't read this photo.";
+      await db
+        .update(mediaItems)
+        .set({ status: "failed", error })
+        .where(eq(mediaItems.id, item.id));
+      // Same as any other failure: the pile updates without a reload.
+      await notifyMediaUpdated(item.vlogId, {
+        mediaItemId: item.id,
+        status: "failed",
+        thumbnailKey: null,
+        proxyKey: null,
+        durationSeconds: null,
+        width: null,
+        height: null,
+        capturedAt: null,
+        error,
+      });
+      return;
     }
 
     if (isVideo) {
@@ -76,6 +143,23 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         await uploadFile(proxyKey, proxyPath, "video/mp4");
       } catch (err) {
         console.warn(`[process-media] proxy failed for ${item.id}:`, (err as Error).message);
+      }
+
+      // The contact sheet the strip paints across the shot. Built from the
+      // original rather than the proxy so it survives a proxy that failed.
+      const plan = planFilmstrip(info?.durationSeconds ?? null);
+      if (plan) {
+        const stripPath = path.join(workDir, "filmstrip.jpg");
+        try {
+          await generateFilmstrip(localOriginal, stripPath, plan);
+          filmstripKey = buildStorageKey(item.vlogId, "filmstrip", item.id, "filmstrip.jpg");
+          await uploadFile(filmstripKey, stripPath, "image/jpeg");
+          filmstripFrames = plan.frames;
+          filmstripIntervalSeconds = plan.intervalSeconds;
+        } catch (err) {
+          filmstripKey = null;
+          console.warn(`[process-media] filmstrip failed for ${item.id}:`, (err as Error).message);
+        }
       }
     }
 
@@ -95,6 +179,10 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         status: "ready",
         thumbnailKey,
         proxyKey,
+        filmstripKey,
+        filmstripFrames,
+        filmstripIntervalSeconds,
+        peaks,
         width: info?.width ?? null,
         height: info?.height ?? null,
         durationSeconds: info?.durationSeconds ?? null,

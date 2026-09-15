@@ -176,3 +176,112 @@ Still open:
 - [ ] Auto-generated subtitles (whisper.cpp in the worker).
 - [ ] Multi-language UI.
 - [ ] Backup/restore command for the whole instance.
+
+## Film page — UX review (2026-09-13)
+
+Two bugs that undermine the editor:
+
+- [x] **Reorders and lifts on the Film page don't survive the next sync.** Strip
+      drag, Earlier/Later and "Lift this shot out" are document-only ops over the
+      socket; `syncCut` rebuilds the base track from `selections` and
+      `cutOverride`, and nothing in the editor calls `reorderCutAction` or
+      `setCutOverrideAction`. Any vote, upload, cut-line drag — or the render
+      itself — puts the shot back. Route them through the cut actions.
+- [x] **The probe misses rotation on modern phone files.** `probe()` reads only
+      `side_data_list[0].rotation`; HDR side data comes first on iPhone/Samsung
+      clips, so portrait video is stored 1920×1080 and `resolveFit` never applies
+      the Blur policy. `find` the Display Matrix entry, fall back to
+      `tags.rotate`, and backfill existing rows.
+
+UX, in order:
+
+- [x] Fixed-viewport layout: no page scroll. Preview capped ~45vh, strip sized to
+      its content and scrolling internally, side column with its own scroll.
+      Today the page is 1870px tall at 1440×900 and the strip is 893px of mostly void.
+- [x] Drop the "Beat 05 · Cut" masthead and blurb inside the editor; running time
+      and shot count move into the transport bar.
+- [x] Side column: Auto-cut, format, bed choice and ducking are film settings —
+      behind one "Film settings" sheet. Layers/Mix lists duplicate the lanes;
+      replace with "+ Layer" / "+ Sound" buttons on the strip toolbar.
+- [x] Filmstrip thumbnails (sprite sheet from the worker) and audio waveforms
+      (peaks array from the worker). Open: a file with a manual rotation falls
+      back to the single thumbnail; the strip isn't regenerated on rotate.
+- [x] Zoom about the playhead, cmd+wheel / pinch, fit-to-width, and auto-scroll
+      the strip during playback.
+- [x] Transition marker on the cut line between shots, picker opens from it.
+- [x] Direct manipulation in the preview: drag and corner-resize layers and titles.
+- [x] Inspector hierarchy: Timing / Look / Sound / Text groups, rare controls
+      collapsed, number fields beside sliders on desktop. Replace the layer
+      start slider (0.05s steps across the whole film) with time fields and
+      "at playhead".
+- [x] Titles: expose start, duration, size and colour (already in the schema).
+- [x] Small: click-to-seek on the Picture lane; one verb for delete across
+      inspectors; lane labels truncate on phones. Still open: "Reel 02 · Strip"
+      decorative label, and Gather's "Pull this frame?" copy.
+- [x] Reaction marks: the ●/●●/●●● tally reads as a rating and is illegible at
+      thumbnail size. Distinct ordered glyphs (✓ ★ ✦), tier names on the medium
+      size, and a fill-plus-count instead of the 3px weight bar.
+- [ ] Phone contact-sheet cards: three 34px mark cells overflow the ~88px frame
+      (pre-existing). Narrower coarse floor, or tap-to-open marks on phone cards.
+- [ ] Vlogs created before the grease-pencil change keep legacy emoji tiers in
+      `vlogs.reaction_tiers` with no way to reset them.
+
+Features that make it a complete tool:
+
+- [x] Undo/redo, local per client via inverse ops.
+- [x] Keyboard: space, arrows to nudge, `[`/`]`, S, delete, cmd+Z, frame stepping.
+      Frame step is hard-coded to 30fps — pass `renderFps` down from page.tsx.
+- [x] Audition: "Play this shot" loops the trimmed window in the preview, trim
+      handles scrub the picture; "Play this track" solos an audio track.
+- [x] J/K/L shuttle.
+- [ ] Pitch-preserving speed (`rubberband`); `atempo` shifts pitch.
+- [x] Document speed/look in CLAUDE.md.
+- [x] Split at the playhead (`clip.split` op). Halves share one `selections`
+      row, so they can't be reordered apart or lifted separately yet — that
+      needs selections keyed by clip, not media.
+- [x] Add a shot from the pile directly on the strip, at the playhead.
+- [ ] A real text tool, plus a film title card and end credits from the crew list.
+- [ ] Multi-select on the strip for batch transitions, mute and lift.
+- [x] Speed and a few colour looks.
+- [ ] Collaborator selection highlights on the strip.
+
+## Film page — menu system (2026-09-15 audit, full report in docs/film-menu-audit-2026-09-15.md)
+
+- [ ] **Toolbar owns the room's chrome.** (S) Drop "← Back to the floor" from the
+      toolbar (keep it in the empty-strip state); span the row across the main
+      column instead of the preview's maxWidth; left Undo/Redo/?, right
+      "1:12 · 18 shots" + Film settings + Print. Hide "?" below md.
+- [ ] **Strip toolbar gets the verbs.** (M) Replace the Layers and Mix tabs with
+      `+ Shot` / `+ Layer` / `+ Sound` buttons on the strip toolbar; each opens the
+      existing picker as an anchored popover (desk) or bottom sheet (phone).
+      Delete "Reel 02 · Strip". The lanes are the list — no panel duplicates them.
+- [ ] **Film settings is a sheet, not a tab.** (M) Move Director + Format (+ Duck)
+      behind a ⚙ "Film settings" button. Order Shape → Pace → wrong-shape policy →
+      toggles → Re-cut footer. Friends see Shape but its buttons are disabled with
+      "Only <creator> can change the shape". Remove the duplicated fit blurb.
+- [ ] **Side column = inspector, full stop.** (M) One stable header ("Selected ·
+      Shot 02 of 18"), no relabelling tab; ARIA tabs pattern only if any tab row
+      survives (arrow keys, aria-controls, 12px labels, ≥40px tall). Selection no
+      longer force-switches panels; the Pile picker shows its anchor ("after shot
+      04 ▾") and defaults to the shot under the playhead.
+- [ ] **Phone editor is a fixed viewport.** (L) Preview ≤40dvh, strip fills the
+      rest and scrolls horizontally only; tool row (+ Shot, + Layer, + Sound, ⚙)
+      under the transport; every secondary panel is the bottom sheet the inspector
+      already uses; sheet content gets a sticky footer for the Take-out/Done row.
+- [ ] **Cut marker you can find.** (S) 24px on desk as on touch; hard cuts at ~50%
+      opacity always, 100% on hover or when an adjacent shot is selected. Inspector
+      Transition section shrinks to a one-line summary that focuses the marker.
+- [ ] **44px everywhere it's tapped.** (S) Transport Play 36/44; "Play this shot",
+      −5s/+5s/Use all, Pile filter, Film checkboxes → `.btn`-derived classes so the
+      touch media query applies; checkbox rows full-width ≥40px.
+- [ ] **Compact masthead on Film.** (M) One 48px row (wordmark · title · segmented
+      Trip/Film/Watch · presence · share); the slate line and display rail stay on
+      Trip only. Frees ~80px, which at 1280×720 is the difference between a 444px
+      and a 590px picture.
+- [ ] **Shortcuts on the controls.** (S) kbd hint on Split (S), Take out (⌫), Undo
+      (⌘Z) buttons; keep the "?" card as the index.
+- [ ] **One name per thing.** (S) "Trip" not "the floor"/"the Trip page"; "Music"
+      not "Bed"; "Sound n" not "Cue/Snd"; "Muted" not "Held out"; "marks" not
+      "rank"; sheet titles = inspector header; tab counts use the rail's chip.
+- [ ] **Gutter labels by width.** (S) Icons at 52px, words at 74px, instead of
+      `Pic / L1 / Bed`.

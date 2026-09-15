@@ -84,7 +84,7 @@ function Row({
             </span>
           )}
         </p>
-        <p className="mt-0.5 font-mono text-2xs uppercase tracking-label text-ink-500">
+        <p className="mt-0.5 font-mono text-2xs uppercase tracking-label text-ink-600">
           {row.members} crew · {row.liveMedia} item{row.liveMedia === 1 ? "" : "s"}
           {row.prunedMedia > 0 && ` (+${row.prunedMedia} swept)`} ·{" "}
           {formatDate(row.createdAt)}
@@ -93,7 +93,7 @@ function Row({
 
       <div className="text-right">
         <p className="timecode text-[15px] text-ink-900">{formatBytes(total)}</p>
-        <p className="font-mono text-2xs text-ink-500">
+        <p className="font-mono text-2xs text-ink-600">
           {formatBytes(row.sourceBytes)} source · {formatBytes(row.renderBytes)} film
         </p>
       </div>

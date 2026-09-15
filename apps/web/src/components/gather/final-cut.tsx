@@ -20,6 +20,7 @@ import {
 } from "@/lib/actions/cut";
 import { SectionHead } from "../brand";
 import { useIsTouch } from "@/hooks/use-media-query";
+import { RotatedMedia } from "@/lib/rotated-media";
 import { cn } from "@/lib/cn";
 
 /**
@@ -35,12 +36,15 @@ export function FinalCut({
   media,
   music,
   timeline,
+  onOpenEditor,
   onOpenClip,
 }: {
   slug: string;
   media: MediaItemView[];
   music: MusicItemView[];
   timeline: TimelineDoc;
+  /** Takes this viewer through to the bench. Omitted, the foot row is hidden. */
+  onOpenEditor?: () => void;
   onOpenClip?: (item: MediaItemView) => void;
 }) {
   const touch = useIsTouch();
@@ -164,6 +168,7 @@ export function FinalCut({
       <SectionHead
         eyebrow="Beat 04 · Shortlist"
         title="The rough cut"
+        size="sm"
         note={
           touch
             ? "Assembled from the crew's marks, live. Use the arrows to move a shot, ✕ to drop it, or pull one back off the floor."
@@ -197,7 +202,7 @@ export function FinalCut({
 
       {inCut.length === 0 ? (
         <div className="mt-4 border border-[color:var(--hair)] bg-paper-200 bg-hatch px-6 py-12 text-center">
-          <p className="font-mono text-2xs uppercase tracking-label text-ink-500">
+          <p className="font-mono text-2xs uppercase tracking-label text-ink-600">
             Nothing has made the cut yet
           </p>
           <p className="mx-auto mt-2 max-w-xs text-[13px] leading-relaxed text-ink-600">
@@ -248,13 +253,15 @@ export function FinalCut({
                       title={item.originalFilename}
                     >
                       {item.thumbnailUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={item.thumbnailUrl}
-                          alt=""
-                          draggable={false}
-                          className="print-tone h-full w-full object-cover"
-                        />
+                        <RotatedMedia rotation={item.rotation}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={item.thumbnailUrl}
+                            alt=""
+                            draggable={false}
+                            className="print-tone h-full w-full object-cover"
+                          />
+                        </RotatedMedia>
                       ) : (
                         <div className="h-full w-full bg-ink-800 bg-hatch" />
                       )}
@@ -342,7 +349,7 @@ export function FinalCut({
                 >
                   <span className="text-sm">{trayOpen ? "▾" : "＋"}</span>
                   The floor
-                  <span className="text-ink-500">{leftOut.length} left</span>
+                  <span className="text-ink-400">{leftOut.length} left</span>
                 </button>
               )}
             </div>
@@ -371,14 +378,14 @@ export function FinalCut({
             ) : bedTrack?.mediaItemId ? (
               <span className="text-xs text-ink-300">An uploaded audio file is the bed.</span>
             ) : (
-              <span className="font-mono text-2xs uppercase tracking-label text-ink-500">
+              <span className="font-mono text-2xs uppercase tracking-label text-ink-400">
                 {music.length > 0
                   ? "Running dry — pick a track in the sound lane"
                   : "No sound yet"}
               </span>
             )}
             {extraCues > 0 && (
-              <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-500">
+              <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-400">
                 +{extraCues} cue{extraCues === 1 ? "" : "s"} on the bench
               </span>
             )}
@@ -407,13 +414,15 @@ export function FinalCut({
                     title={`Force ${item.originalFilename} back into the cut`}
                   >
                     {item.thumbnailUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={item.thumbnailUrl}
-                        alt=""
-                        loading="lazy"
-                        className="print-tone h-full w-full object-cover opacity-60 transition-opacity group-hover:opacity-100"
-                      />
+                      <RotatedMedia rotation={item.rotation}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={item.thumbnailUrl}
+                          alt=""
+                          loading="lazy"
+                          className="print-tone h-full w-full object-cover opacity-60 transition-opacity group-hover:opacity-100"
+                        />
+                      </RotatedMedia>
                     ) : (
                       <div className="h-full w-full bg-ink-850 bg-hatch" />
                     )}
@@ -440,6 +449,34 @@ export function FinalCut({
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/*
+            The end of the block, and the end of the job. Not the render: a cut
+            assembled from votes is a rough cut, and the honest next move is to
+            go and look at it properly rather than to print it from a strip of
+            thumbnails. The lab is one room further on, behind a dialog that
+            says what it would cost.
+          */}
+          {onOpenEditor && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[color:var(--hair-dark)] px-3 py-3">
+              <div className="min-w-0">
+                <p className="eyebrow-light">Running time</p>
+                <p className="timecode mt-0.5 text-lg leading-none text-paper-100">
+                  {formatDuration(total)}
+                </p>
+                <p className="mt-1 text-[13px] leading-relaxed text-ink-300">
+                  When it reads right, take it to the bench — trim it, score it, then print it.
+                </p>
+              </div>
+              <button
+                onClick={onOpenEditor}
+                disabled={inCut.length === 0}
+                className="btn-outline-dark w-full sm:w-auto"
+              >
+                Open the cutting bench →
+              </button>
             </div>
           )}
         </div>

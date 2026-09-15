@@ -6,6 +6,7 @@ import {
   RENDER_HEIGHTS,
   RENDER_PRESETS,
   crfLabel,
+  frameFor,
   renderHeightLabel,
   type RenderSettings,
 } from "@vlogbuddy/shared";
@@ -51,6 +52,11 @@ export function RenderSettingsForm({ settings }: { settings: RenderSettings }) {
               </option>
             ))}
           </select>
+          <span className="mt-1 block text-2xs leading-relaxed text-ink-500">
+            The film&rsquo;s shorter edge. Each vlog picks its own shape on the bench — an
+            upright film comes out {frameFor("portrait", draft.renderHeight).width}×
+            {frameFor("portrait", draft.renderHeight).height}.
+          </span>
         </label>
 
         <label className="block">

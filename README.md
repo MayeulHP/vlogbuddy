@@ -318,6 +318,7 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 | `MAX_UPLOAD_MB` | `2048` | Per-file upload limit. |
 | `RENDER_HEIGHT` / `RENDER_FPS` | `1080` / `30` | First-boot defaults only — the export format is set on `/admin` after that. |
 | `RENDER_CONCURRENCY` | `1` | Raise only if the host has CPU to spare. |
+| `RENDER_THREADS` | `0` (all cores) | Cores one render may use. Set `1`–`2` on a box that also serves other things: the print takes longer and nothing else starves. |
 | `ENABLE_YT_AUDIO` | `false` | See the warning above. |
 
 ---

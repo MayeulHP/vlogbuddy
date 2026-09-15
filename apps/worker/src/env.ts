@@ -20,6 +20,16 @@ const envSchema = z.object({
 
   RENDER_CONCURRENCY: z.coerce.number().default(1),
   /**
+   * Cores the renderer may use, 0 meaning "all of them".
+   *
+   * FFmpeg takes every core it can see, which is right on a box that exists to
+   * render and wrong on one that also serves the app, a photo library and
+   * whatever else lives on the same Pi. Capping it makes a render slower and
+   * leaves the machine usable, which is the trade an operator should get to
+   * make.
+   */
+  RENDER_THREADS: z.coerce.number().min(0).default(0),
+  /**
    * First-boot defaults only. Once the admin has saved the export format on
    * /admin, the database row wins and changing these does nothing.
    */

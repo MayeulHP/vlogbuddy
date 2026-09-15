@@ -346,6 +346,68 @@ export function beatGridInFilmTime(
   });
 }
 
+/**
+ * A grid measured off a track nobody could hear a pulse in would retime the
+ * whole film on a guess. The analyser already refuses the hopeless cases; this
+ * is the second gate, on the value that survives in the row.
+ */
+export const MIN_BEAT_CONFIDENCE = 0.2;
+
+/** The beat columns, as both `media_items` and `music_items` carry them. */
+export interface BeatSource {
+  bpm: number | null;
+  beatOffsetSeconds: number | null;
+  beatTimes: number[] | null;
+  beatConfidence: number | null;
+}
+
+/**
+ * The music bed's beats, moved onto the film's clock — the bed's own start on
+ * the timeline and its offset into the track are both taken out here, so the
+ * director never has to know a bed exists.
+ *
+ * Null whenever there's nothing to snap to: no bed, an unanalysed track, or a
+ * tempo we don't believe. All three mean the cut is timed exactly as it was
+ * before any of this existed.
+ *
+ * Here rather than beside `syncCut`, its only caller for a long time, because
+ * the bench draws the same grid on its ruler. A ruler whose ticks came from a
+ * second reading of the same columns would eventually disagree with the cut it
+ * sits above, and the whole point of the ticks is to be believed.
+ */
+export function beatGridForBed(
+  doc: TimelineDoc,
+  media: (BeatSource & { id: string })[],
+  music: (BeatSource & { id: string })[],
+): BeatGrid | null {
+  const source = bedBeatSource(doc, media, music);
+  if (!source || source.bpm === null) return null;
+  if ((source.beatConfidence ?? 0) < MIN_BEAT_CONFIDENCE) return null;
+
+  const bed = doc.audio.find((t) => t.role === "bed");
+  if (!bed) return null;
+  return beatGridInFilmTime(source, { startAt: bed.startAt, offset: bed.offset });
+}
+
+/**
+ * The row the bed is playing, whether or not a tempo was ever found in it —
+ * which is what tells the difference between "no bed" and "this track has no
+ * pulse we could find".
+ */
+export function bedBeatSource<
+  M extends BeatSource & { id: string },
+  U extends BeatSource & { id: string },
+>(doc: TimelineDoc, media: M[], music: U[]): M | U | null {
+  const bed = doc.audio.find((t) => t.role === "bed");
+  if (!bed) return null;
+  const source = bed.mediaItemId
+    ? media.find((m) => m.id === bed.mediaItemId)
+    : bed.musicItemId
+      ? music.find((m) => m.id === bed.musicItemId)
+      : undefined;
+  return source ?? null;
+}
+
 /** The measured beat nearest `time`, falling back to the periodic grid. */
 export function nearestBeat(time: number, grid: BeatGrid): number {
   const period = 60 / grid.bpm;
@@ -381,6 +443,67 @@ export function snapHold(start: number, hold: number, maxHold: number, grid: Bea
   const snapped = round(beat - start);
   if (snapped < MIN_HOLD || snapped > maxHold) return hold;
   return snapped;
+}
+
+/**
+ * How close a cut has to be to a beat before we'll say it landed on one.
+ * Roughly a frame: the director rounds every length to 3dp and the bench adds
+ * those lengths up, so an exact comparison would miss hits that are audibly
+ * dead on.
+ */
+export const BEAT_HIT_WINDOW = 0.04;
+
+/**
+ * Every beat of `grid` between `from` and `to`, for drawing. The measured
+ * beats are used wherever they reach — they're what the ear agrees with — and
+ * the periodic grid fills in either side of the analysed stretch, exactly as
+ * `nearestBeat` falls back to it.
+ *
+ * `limit` is a guard, not a feature: a 200bpm grid over an hour-long film is
+ * twelve thousand DOM nodes nobody can see.
+ */
+export function beatsBetween(
+  grid: BeatGrid,
+  from: number,
+  to: number,
+  limit = 1200,
+): number[] {
+  if (!(to > from)) return [];
+  const period = 60 / grid.bpm;
+  const measured = (grid.beats ?? []).filter((t) => Number.isFinite(t));
+  const out: number[] = [];
+
+  const covered =
+    measured.length > 1
+      ? { start: measured[0], end: measured[measured.length - 1] }
+      : null;
+
+  // Periodic beats before the measured stretch, then the measured ones, then
+  // periodic again past its end. `firstBeat` sets the phase throughout.
+  const periodic = (lo: number, hi: number) => {
+    if (!(hi > lo)) return;
+    const first = grid.firstBeat + Math.ceil((lo - grid.firstBeat) / period) * period;
+    for (let t = first; t <= hi && out.length < limit; t += period) {
+      if (t >= from) out.push(round(t));
+    }
+  };
+
+  if (!covered) {
+    periodic(from, to);
+    return out;
+  }
+
+  // `nearestBeat` trusts the measured list for anything within one period of
+  // either end of it, so the periodic fill has to stop short of that reach —
+  // a mark drawn just past the last measured beat would snap to the measured
+  // beat instead of to itself, and the ruler would be lighting the wrong tick.
+  const EDGE = 1e-6;
+  periodic(from, Math.min(to, covered.start - period - EDGE));
+  for (const t of measured) {
+    if (t >= from && t <= to && out.length < limit) out.push(round(t));
+  }
+  periodic(Math.max(from, covered.end + period + EDGE), to);
+  return out;
 }
 
 // --- The pass ---------------------------------------------------------------
@@ -551,9 +674,25 @@ function applyToClip(clip: Clip, plan: Plan): Clip {
  */
 export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc {
   if (!input.settings.enabled) return doc;
-  if (doc.clips.length === 0 || doc.clips.length !== input.cut.length) return doc;
+  if (doc.clips.length === 0) return doc;
 
-  const scenes = detectScenes(input.cut);
+  /**
+   * The cut is a list of *media*; the base track is a list of *shots*, and
+   * since `clip.split` the two are no longer the same length — both halves of
+   * a split shot are the same entry. Everything below indexes by shot, so the
+   * entries are expanded to match. A clip pointing at something not in the cut
+   * means the document hasn't been reconciled yet: nothing here would be right,
+   * so don't guess.
+   */
+  const byMedia = new Map(input.cut.map((e) => [e.mediaItemId, e]));
+  const cut: CutEntry[] = [];
+  for (const clip of doc.clips) {
+    const entry = byMedia.get(clip.mediaItemId);
+    if (!entry) return doc;
+    cut.push(entry);
+  }
+
+  const scenes = detectScenes(cut);
   const sceneOf: Scene[] = [];
   const sceneIndexOf: number[] = [];
   scenes.forEach((scene, n) => {
@@ -571,7 +710,7 @@ export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc
   // everything downstream of it snaps against where that really leaves us.
   let cursor = 0;
   const clips = doc.clips.map((clip, i) => {
-    const entry = input.cut[i];
+    const entry = cut[i];
     const scene = sceneOf[i];
     const owns = new Set(clip.auto);
 
@@ -584,7 +723,7 @@ export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc
 
     const next = applyToClip(
       clip,
-      planClip(entry, i, input.cut, scene, sceneIndexOf[i], input, startsAt, grid),
+      planClip(entry, i, cut, scene, sceneIndexOf[i], input, startsAt, grid),
     );
     cursor = round(startsAt + clipDuration(next, entry.durationSeconds));
     return next;
@@ -594,7 +733,14 @@ export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc
   return { ...doc, clips, updatedAt: new Date().toISOString() };
 }
 
-/** Hands every clip back to the auto-cut. Used by the "re-cut" op and action. */
+/**
+ * Hands every clip back to the auto-cut. Used by the "re-cut" op and action.
+ *
+ * Both halves of a split shot are re-armed too, and the pass has one window per
+ * media item to give them — so they come back as the same few seconds twice.
+ * That's the bargain "start again" already makes with every hand trim; it just
+ * shows more here.
+ */
 export function rearmAll(doc: TimelineDoc): TimelineDoc {
   return { ...doc, clips: doc.clips.map((c) => ({ ...c, auto: [...AUTO_FIELDS] })) };
 }

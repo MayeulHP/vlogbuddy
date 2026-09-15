@@ -28,6 +28,20 @@ export function formatDuration(seconds: number | null | undefined): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+/**
+ * The same clock, to a tenth.
+ *
+ * `formatDuration` rounds to whole seconds, which is the right grain for a
+ * running time and far too coarse to trim against — half the shots the
+ * auto-cut makes are shorter than the rounding error. Anything showing an in
+ * or out point uses this instead.
+ */
+export function formatFine(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "--:--";
+  const total = Math.max(0, seconds);
+  return `${Math.floor(total / 60)}:${(total % 60).toFixed(1).padStart(4, "0")}`;
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];
@@ -72,12 +86,34 @@ export function estimatedClipDuration(
  * Ranking score for the dump view. Sum rewards broad approval, average rewards
  * enthusiasm; blending them stops a single 🤩 from outranking five 🔥. Uses a
  * Bayesian-ish prior so items with few votes settle near the middle.
+ *
+ * The confidence term multiplies `supporters`, not `count`, and the difference
+ * is the whole point of recording a pass. Counting every verdict there measured
+ * *attention* rather than support, so three passes on top of a hero mark used to
+ * push a shot up the table — looking at something and turning it down still
+ * added to the evidence for it. Passes belong in the average, where they drag it
+ * down, and nowhere else.
+ *
+ * Which leaves a shot the whole crew passed on at exactly zero, level with one
+ * nobody has opened. That reads harsh and is simply true: neither is in the
+ * film, and the cut line shouldn't have to tell them apart.
+ *
+ * `priorMean` sits at 0.8 rather than 1.6 because the scale starts at 0 now.
+ * It's the same quarter-way-up-the-range shrug it always was, measured against
+ * a range with a floor.
  */
-export function rankScore(sum: number, count: number, priorWeight = 2, priorMean = 1.6): number {
-  if (count === 0) return 0;
+export function rankScore(
+  sum: number,
+  count: number,
+  supporters: number,
+  priorWeight = 2,
+  priorMean = 0.8,
+): number {
+  if (count === 0 || supporters === 0) return 0;
   const bayesAverage = (sum + priorWeight * priorMean) / (count + priorWeight);
-  return bayesAverage * Math.log2(count + 1);
+  return bayesAverage * Math.log2(supporters + 1);
 }
+
 
 export function slugifyFilename(name: string): string {
   return name

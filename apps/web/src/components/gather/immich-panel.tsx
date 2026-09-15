@@ -306,7 +306,7 @@ function TransferBar({
           <p
             className={cn(
               "font-mono text-[11px] tabular-nums",
-              failed ? "text-signal-600" : "text-ink-500",
+              failed ? "text-signal-600" : "text-ink-600",
             )}
           >
             {transfer.error ?? transfer.message ?? ""}

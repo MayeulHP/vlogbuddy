@@ -170,6 +170,9 @@ async function main() {
         trimStart: 0,
         trimEnd: Math.min(2, r.durationSeconds ?? 2),
         duration: 2,
+        fit: "auto" as const,
+        speed: 1,
+        look: "none" as const,
         transitionIn: i === 0 ? ("cut" as const) : ("crossfade" as const),
         transitionDuration: 0.5,
         volume: 1,
@@ -211,7 +214,13 @@ async function main() {
       ],
       audio: [],
       duckClipAudio: true,
-      director: { enabled: true, pace: "standard" as const, sceneText: false, beatSnap: false },
+      director: {
+        enabled: true,
+        pace: "standard" as const,
+        sceneText: false,
+        beatSnap: false,
+        fitPolicy: "blur" as const,
+      },
     };
 
     await db.update(timelines).set({ doc, revision: 1 }).where(eq(timelines.vlogId, vlog.id));

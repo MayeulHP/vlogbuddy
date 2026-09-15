@@ -45,7 +45,7 @@ export function PresenceBar({
           </div>
         ))}
         {overflow > 0 && (
-          <div className="flex h-6 items-center border border-[color:var(--hair)] bg-paper-200 px-1 font-mono text-2xs text-ink-500">
+          <div className="flex h-6 items-center border border-[color:var(--hair)] bg-paper-200 px-1 font-mono text-2xs text-ink-600">
             +{overflow}
           </div>
         )}

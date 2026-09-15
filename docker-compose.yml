@@ -124,5 +124,6 @@ services:
       RENDER_CONCURRENCY: ${RENDER_CONCURRENCY}
       RENDER_HEIGHT: ${RENDER_HEIGHT}
       RENDER_FPS: ${RENDER_FPS}
+      RENDER_THREADS: ${RENDER_THREADS:-0}
     volumes:
       - ./data/worker-tmp:/tmp/vlogbuddy

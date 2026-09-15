@@ -47,9 +47,9 @@ export type CompleteUploadInput = z.infer<typeof completeUploadSchema>;
 export const reactSchema = z.object({
   targetType: z.enum(["media", "music"]),
   targetId: z.string().uuid(),
-  /** null clears the reaction. */
+  /** 0 is a pass — seen and declined. null clears the verdict entirely. */
   score: z
-    .union([z.literal(1), z.literal(2), z.literal(3)])
+    .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)])
     .nullable(),
 });
 export type ReactInput = z.infer<typeof reactSchema>;
@@ -109,5 +109,12 @@ export const scoreThresholdSchema = z.object({
 export const mediaKindSchema = z.enum(MEDIA_KINDS);
 export const musicSourceSchema = z.enum(MUSIC_SOURCES);
 export const reactionScoreSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
+/** A mark or a pass — everything that can be stored against a member's name. */
+export const verdictSchema = z.union([
+  z.literal(0),
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+]);
 
 export { REACTION_SCORES };

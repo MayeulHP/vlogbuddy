@@ -36,12 +36,15 @@ export const WORKSPACE_TABS = ["gather", "edit", "watch"] as const;
 export type WorkspaceTab = (typeof WORKSPACE_TABS)[number];
 
 export const WORKSPACE_TAB_LABELS: Record<WorkspaceTab, string> = {
-  gather: "The Floor",
-  edit: "The Cut",
-  watch: "Final Cut",
+  gather: "Trip",
+  edit: "Film",
+  watch: "Watch",
 };
 
-/** Reel numbers stand in for icons — this is a film, not a toolbar. */
+/**
+ * Reel numbers stand in for icons on the cover. The rail doesn't use them:
+ * R1/R2/R3 is one more thing to decode before you can click the right room.
+ */
 export const WORKSPACE_TAB_REELS: Record<WorkspaceTab, string> = {
   gather: "R1",
   edit: "R2",
@@ -65,7 +68,7 @@ export const FLOW_STAGES = [
   { id: "vote", label: "Vote", blurb: "One frame at a time, mark what's worth keeping" },
   { id: "shortlist", label: "Shortlist", blurb: "What the crew kept, in order, as a rough cut" },
   { id: "cut", label: "Cut", blurb: "Trim, retime, title, score" },
-  { id: "final", label: "Final Cut", blurb: "Screen it, download it, send it round" },
+  { id: "final", label: "Watch", blurb: "Screen it, download it, send it round" },
 ] as const satisfies readonly { id: string; label: string; blurb: string }[];
 
 export type FlowStageId = (typeof FLOW_STAGES)[number]["id"];
@@ -81,21 +84,53 @@ export type CutOverride = (typeof CUT_OVERRIDES)[number];
 export const REACTION_SCORES = [1, 2, 3] as const;
 export type ReactionScore = (typeof REACTION_SCORES)[number];
 
+/**
+ * Seen it, and it's not for me.
+ *
+ * A pass is stored like any other verdict rather than deleted, because "what
+ * haven't you looked at yet" and "what did you decline" are different
+ * questions and a missing row only answers the first. While they shared one
+ * value the deck kept re-serving shots people had already turned down, and the
+ * only way to stop being asked was to award a mark you didn't mean — which is
+ * how a pile of default Keeps got into the film.
+ */
+export const PASS_SCORE = 0;
+
+/**
+ * What one member said about one item: a mark, or a pass. `null` isn't a
+ * verdict at all — it means they haven't looked.
+ */
+export type Verdict = ReactionScore | typeof PASS_SCORE;
+
 export interface ReactionTier {
   score: ReactionScore;
+  /**
+   * The mark itself. Still called `emoji` because it is a stored column shape
+   * (`vlogs.reaction_tiers`) and renaming it would need a migration for no
+   * gain — but it must never be one: a colour emoji renders differently on
+   * every platform and carries a mood nobody chose. Text glyphs only.
+   */
   emoji: string;
   label: string;
 }
 
 /**
- * Grease-pencil marks, not emoji and not karma: one mark means keep it, three
- * means it's the shot everyone will talk about. The glyph is a tally, so a
- * vote reads as a judgement about the footage rather than a score on a person.
+ * Grease-pencil marks, not emoji and not karma.
+ *
+ * Three *kinds* of mark rather than a tally of one: a run of dots read as a
+ * one-to-three star rating, and at thumbnail size ●● and ●●● were the same
+ * smudge. A tick, a star and a burst are distinguishable at 9px, are text
+ * glyphs in every system font, and still climb — the burst is the one you
+ * only draw a few times on a reel.
+ *
+ * `\uFE0E` pins text presentation: a bare star is emoji-styled by some
+ * Android and Windows fallbacks, which is exactly the platform drift the
+ * earlier emoji version had.
  */
 export const DEFAULT_REACTIONS: ReactionTier[] = [
-  { score: 1, emoji: "\u25CF", label: "Keep" },
-  { score: 2, emoji: "\u25CF\u25CF", label: "Strong" },
-  { score: 3, emoji: "\u25CF\u25CF\u25CF", label: "Hero" },
+  { score: 1, emoji: "\u2713\uFE0E", label: "Keep" },
+  { score: 2, emoji: "\u2605\uFE0E", label: "Strong" },
+  { score: 3, emoji: "\u2726\uFE0E", label: "Hero" },
 ];
 
 export const MEDIA_KINDS = ["photo", "video"] as const;
@@ -192,10 +227,80 @@ export const XFADE_FOR: Record<Transition, string | null> = {
   pixelize: "pixelize",
 };
 
+/**
+ * A grade, named for what it does to a holiday rather than for the filter that
+ * makes it. Five is the whole list on purpose: a look is a decision taken in
+ * two seconds from a row of chips, and a wall of forty is a colour suite.
+ */
+export const CLIP_LOOKS = ["none", "warm", "cool", "faded", "mono", "punchy"] as const;
+export type ClipLook = (typeof CLIP_LOOKS)[number];
+
+export const LOOK_LABELS: Record<ClipLook, string> = {
+  none: "As shot",
+  warm: "Warm",
+  cool: "Cool",
+  faded: "Faded",
+  mono: "Mono",
+  punchy: "Punchy",
+};
+
+export const LOOK_BLURBS: Record<ClipLook, string> = {
+  none: "Whatever the camera made of it.",
+  warm: "Late afternoon, everywhere.",
+  cool: "Cold light. Morning, water, glass.",
+  faded: "Lifted blacks, like an old print.",
+  mono: "Black and white.",
+  punchy: "Harder contrast, louder colour.",
+};
+
+/**
+ * What each look compiles to in FFmpeg. The single place a colour filter name
+ * is spelled — `LOOK_CSS` beside it is the browser's *approximation* of the
+ * same grade for the preview, and the two will never match exactly (CSS has no
+ * curves and its sepia isn't a colour balance). Close enough to choose by is
+ * the bar; the print is the truth.
+ */
+export const LOOK_FILTERS: Record<ClipLook, string | null> = {
+  none: null,
+  warm: "eq=saturation=1.15,colorbalance=rs=0.08:gs=0.02:bs=-0.08",
+  cool: "colorbalance=rs=-0.06:bs=0.10,eq=saturation=1.05",
+  faded: "curves=all='0/0.06 0.5/0.5 1/0.95',eq=saturation=0.80:contrast=0.92",
+  mono: "hue=s=0,eq=contrast=1.08",
+  punchy: "eq=contrast=1.18:saturation=1.30:gamma=0.98",
+};
+
+/** The preview's stand-in for `LOOK_FILTERS`. An approximation — see above. */
+export const LOOK_CSS: Record<ClipLook, string | null> = {
+  none: null,
+  warm: "saturate(1.15) sepia(0.18) hue-rotate(-8deg)",
+  cool: "saturate(1.05) hue-rotate(8deg) brightness(1.02)",
+  faded: "contrast(0.92) saturate(0.8) brightness(1.06)",
+  mono: "grayscale(1) contrast(1.08)",
+  punchy: "contrast(1.18) saturate(1.3)",
+};
+
+/**
+ * How far a shot can be pushed either way. Beyond 4× a phone clip is a smear,
+ * and below a quarter FFmpeg's `atempo` chain gets silly; both ends are also
+ * what the schema clamps to.
+ */
+export const MIN_CLIP_SPEED = 0.25;
+export const MAX_CLIP_SPEED = 4;
+
 /** Does this transition overlap the shot before it? */
 export function overlapsPrevious(transition: Transition): boolean {
   return XFADE_FOR[transition] !== null;
 }
+
+/**
+ * The shortest anything on the bench is allowed to be.
+ *
+ * Lives here because the bench enforces it in three places that must agree —
+ * a handle dragged to nothing, a trim typed to nothing and the inspector's
+ * grow buttons — and three copies of a number whose whole job is to match is a
+ * bug waiting for someone to tune one of them.
+ */
+export const MIN_CLIP_SPAN = 0.2;
 
 /** Photos have no intrinsic duration; this is how long they hold on screen. */
 export const DEFAULT_PHOTO_DURATION = 3;
@@ -238,6 +343,28 @@ export const ACCEPTED_IMAGE_TYPES = [
   "image/heif",
   "image/avif",
 ];
+
+/**
+ * Image types a browser will actually paint.
+ *
+ * HEIC is the odd one out and it matters more than its share of the list: it
+ * is what every recent iPhone shoots by default, and outside Safari nothing
+ * can decode it. A HEIC original handed straight to an <img> is a broken
+ * image, so anything in this gap needs a JPEG stand-in made for it server-side
+ * before a single person can judge the shot.
+ */
+export const BROWSER_SAFE_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+];
+
+/** Does this photo need a stand-in before a browser can show it? */
+export function needsDisplayCopy(mime: string): boolean {
+  return mime.startsWith("image/") && !BROWSER_SAFE_IMAGE_TYPES.includes(mime);
+}
 
 export const ACCEPTED_VIDEO_TYPES = [
   "video/mp4",

@@ -11,6 +11,7 @@ import {
   type TimelineOp,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
+import { RotatedMedia } from "@/lib/rotated-media";
 import { cn } from "@/lib/cn";
 import { audioTrackLabel } from "./timeline-tracks";
 import type { Selection } from "./selection";
@@ -29,6 +30,7 @@ export function LayerPanel({
   selection,
   onSelect,
   onDispatch,
+  bare = false,
 }: {
   timeline: TimelineDoc;
   media: MediaItemView[];
@@ -37,6 +39,8 @@ export function LayerPanel({
   selection: Selection;
   onSelect: (selection: Selection) => void;
   onDispatch: (op: TimelineOp) => void;
+  /** Inside the bench accordion, the fold's own header is the panel's header. */
+  bare?: boolean;
 }) {
   const [picking, setPicking] = useState(false);
   const footage = media.filter((m) => m.kind !== "audio" && m.status === "ready");
@@ -52,25 +56,38 @@ export function LayerPanel({
     (a, b) => b.layer - a.layer || a.startAt - b.startAt,
   );
 
+  const add = (
+    <button onClick={() => setPicking((p) => !p)} className="btn-quiet-dark shrink-0 px-0">
+      {picking ? "Close" : "+ Add"}
+    </button>
+  );
+
   return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
-      <div className="flex items-start justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-3">
-        <div>
-          <p className="eyebrow-light">Over the top</p>
-          <h3 className="headline mt-0.5 text-xl text-paper-100">Layers</h3>
-          <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-500">
+    <section className={cn(!bare && "border border-[color:var(--hair-dark)] bg-ink-850")}>
+      {bare ? (
+        <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2">
+          <p className="font-mono text-2xs uppercase tracking-label text-ink-400">
             Pinned to the clock, not to a shot
           </p>
+          {add}
         </div>
-        <button onClick={() => setPicking((p) => !p)} className="btn-quiet-dark shrink-0 px-0">
-          {picking ? "Close" : "+ Add"}
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-3">
+          <div>
+            <p className="eyebrow-light">Over the top</p>
+            <h3 className="headline mt-0.5 text-xl text-paper-100">Layers</h3>
+            <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-400">
+              Pinned to the clock, not to a shot
+            </p>
+          </div>
+          {add}
+        </div>
+      )}
 
       {picking && (
         <div className="max-h-56 overflow-y-auto border-b border-[color:var(--hair-dark)]">
           {footage.length === 0 ? (
-            <p className="px-4 py-3 font-mono text-2xs text-ink-500">
+            <p className="px-4 py-3 font-mono text-2xs text-ink-400">
               Nothing in the pile is ready yet.
             </p>
           ) : (
@@ -95,8 +112,10 @@ export function LayerPanel({
                 className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-ink-800"
               >
                 {item.thumbnailUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={item.thumbnailUrl} alt="" className="h-8 w-12 shrink-0 object-cover" />
+                  <RotatedMedia rotation={item.rotation} className="h-8 w-12 shrink-0">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={item.thumbnailUrl} alt="" className="h-full w-full object-cover" />
+                  </RotatedMedia>
                 ) : (
                   <span className="h-8 w-12 shrink-0 bg-ink-800 bg-hatch" />
                 )}
@@ -159,6 +178,7 @@ export function SoundPanel({
   onSelect,
   onDispatch,
   onChooseBedMusic,
+  bare = false,
 }: {
   timeline: TimelineDoc;
   music: MusicItemView[];
@@ -172,6 +192,8 @@ export function SoundPanel({
   onDispatch: (op: TimelineOp) => void;
   /** Streaming beds go through the cut engine so the floor agrees with us. */
   onChooseBedMusic: (musicItemId: string | null) => void;
+  /** Inside the bench accordion, the fold's own header is the panel's header. */
+  bare?: boolean;
 }) {
   const [picking, setPicking] = useState(false);
   const bed = timeline.audio.find((t) => t.role === "bed") ?? null;
@@ -197,25 +219,38 @@ export function SoundPanel({
     onChooseBedMusic(null);
   }
 
+  const add = (
+    <button onClick={() => setPicking((p) => !p)} className="btn-quiet-dark shrink-0 px-0">
+      {picking ? "Close" : "+ Add"}
+    </button>
+  );
+
   return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
-      <div className="flex items-start justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-3">
-        <div>
-          <p className="eyebrow-light">Score</p>
-          <h3 className="headline mt-0.5 text-xl text-paper-100">The mix</h3>
-          <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-500">
+    <section className={cn(!bare && "border border-[color:var(--hair-dark)] bg-ink-850")}>
+      {bare ? (
+        <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2">
+          <p className="font-mono text-2xs uppercase tracking-label text-ink-400">
             A bed, plus anything you drop on top
           </p>
+          {add}
         </div>
-        <button onClick={() => setPicking((p) => !p)} className="btn-quiet-dark shrink-0 px-0">
-          {picking ? "Close" : "+ Add"}
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-3">
+          <div>
+            <p className="eyebrow-light">Score</p>
+            <h3 className="headline mt-0.5 text-xl text-paper-100">The mix</h3>
+            <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-400">
+              A bed, plus anything you drop on top
+            </p>
+          </div>
+          {add}
+        </div>
+      )}
 
       {picking && (
         <div className="max-h-56 overflow-y-auto border-b border-[color:var(--hair-dark)]">
           {audioUploads.length === 0 && music.length === 0 ? (
-            <p className="px-4 py-3 font-mono text-2xs text-ink-500">
+            <p className="px-4 py-3 font-mono text-2xs text-ink-400">
               No sound in the pile yet. Drop an audio file or paste a link on the floor.
             </p>
           ) : (

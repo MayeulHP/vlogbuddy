@@ -11,6 +11,7 @@ import {
   vlogs,
 } from "@vlogbuddy/db";
 import {
+  beatGridForBed,
   emptyTimeline,
   normalizeTimeline,
   pruneTimelineReferences,
@@ -18,13 +19,11 @@ import {
   reconcileClips,
   runDirector,
   timelineDuration,
-  beatGridInFilmTime,
   type AudioTrack,
-  type BeatGrid,
   type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
-import { isInCut } from "./is-in-cut";
+import { isInCut, type Standing } from "./is-in-cut";
 
 /**
  * The cut engine.
@@ -115,49 +114,6 @@ function chooseBed(
   return best?.id ?? null;
 }
 
-/**
- * A grid measured off a track nobody could hear a pulse in would retime the
- * whole film on a guess. The analyser already refuses the hopeless cases; this
- * is the second gate, on the value that survives in the row.
- */
-const MIN_BEAT_CONFIDENCE = 0.2;
-
-interface BeatSource {
-  bpm: number | null;
-  beatOffsetSeconds: number | null;
-  beatTimes: number[] | null;
-  beatConfidence: number | null;
-}
-
-/**
- * The music bed's beats, moved onto the film's clock — the bed's own start on
- * the timeline and its offset into the track are both taken out here, so the
- * director never has to know a bed exists.
- *
- * Null whenever there's nothing to snap to: no bed, an unanalysed track, or a
- * tempo we don't believe. All three mean the cut is timed exactly as it was
- * before any of this existed.
- */
-function beatGridForBed(
-  doc: TimelineDoc,
-  media: (BeatSource & { id: string })[],
-  music: (BeatSource & { id: string })[],
-): BeatGrid | null {
-  const bed = doc.audio.find((t) => t.role === "bed");
-  if (!bed) return null;
-
-  const source = bed.mediaItemId
-    ? media.find((m) => m.id === bed.mediaItemId)
-    : bed.musicItemId
-      ? music.find((m) => m.id === bed.musicItemId)
-      : undefined;
-
-  if (!source || source.bpm === null) return null;
-  if ((source.beatConfidence ?? 0) < MIN_BEAT_CONFIDENCE) return null;
-
-  return beatGridInFilmTime(source, { startAt: bed.startAt, offset: bed.offset });
-}
-
 export interface SyncCutOptions {
   /** Re-derive the music bed's start from its position on the lane. */
   resyncBedStart?: boolean;
@@ -219,6 +175,10 @@ export async function syncCut(
           targetId: reactions.targetId,
           count: sql<number>`count(*)::int`,
           sum: sql<number>`coalesce(sum(${reactions.score}), 0)::int`,
+          // Everyone who marked it rather than everyone who looked: a pass is
+          // a verdict, so it lands in `count` and pulls the average down, but
+          // it must never read as evidence *for* the shot.
+          supporters: sql<number>`count(*) filter (where ${reactions.score} >= 1)::int`,
         })
         .from(reactions)
         .where(eq(reactions.vlogId, vlogId))
@@ -230,10 +190,16 @@ export async function syncCut(
 
   const threshold = vlogRow[0]?.scoreThreshold ?? 0;
 
-  const rankOf = new Map<string, number>();
+  const standingOf = new Map<string, Standing>();
   for (const row of reactionRows) {
-    rankOf.set(`${row.targetType}:${row.targetId}`, rankScore(row.sum, row.count));
+    standingOf.set(`${row.targetType}:${row.targetId}`, {
+      rank: rankScore(row.sum, row.count, row.supporters),
+      seen: row.count,
+      supporters: row.supporters,
+    });
   }
+  const NO_VERDICTS: Standing = { rank: 0, seen: 0, supporters: 0 };
+  const standing = (key: string) => standingOf.get(key) ?? NO_VERDICTS;
 
   // --- footage ---------------------------------------------------------------
 
@@ -246,7 +212,7 @@ export async function syncCut(
   [...footage].sort(chronoCompare).forEach((m, i) => chronoRank.set(m.id, i));
 
   const included = footage.filter((m) =>
-    isInCut(m.cutOverride, rankOf.get(`media:${m.id}`) ?? 0, threshold),
+    isInCut(m.cutOverride, standing(`media:${m.id}`), threshold),
   );
 
   const previousOrder = selectionRows
@@ -260,7 +226,7 @@ export async function syncCut(
 
   const trackState = musicRows.map((t) => ({
     id: t.id,
-    rank: rankOf.get(`music:${t.id}`) ?? 0,
+    rank: standing(`music:${t.id}`).rank,
     included: t.cutOverride !== "exclude",
     timelinePosition: t.timelinePosition,
   }));
@@ -315,7 +281,7 @@ export async function syncCut(
         kind: item.kind === "video" ? ("video" as const) : ("photo" as const),
         durationSeconds: item.durationSeconds,
         capturedAt: item.capturedAt?.getTime() ?? null,
-        rank: rankOf.get(`media:${item.id}`) ?? 0,
+        rank: standing(`media:${item.id}`).rank,
       },
     ];
   });

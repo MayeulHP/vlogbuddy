@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatDayLong, type ReactionTier } from "@vlogbuddy/shared";
+import { formatDayLong, PASS_SCORE, type ReactionTier, type Verdict } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { reactAction } from "@/lib/actions/reactions";
+import { useDialog } from "@/hooks/use-dialog";
+import { previewSrc } from "@/lib/preview-src";
+import { RotatedMedia } from "@/lib/rotated-media";
+import { RotateButton } from "@/components/rotate-button";
 import { cn } from "@/lib/cn";
 
 /**
@@ -23,7 +27,8 @@ import { cn } from "@/lib/cn";
 const SWIPE_THRESHOLD = 90;
 const EXIT_MS = 240;
 
-type Verdict = { score: 1 | 2 | 3 | null; direction: "up" | "down" | "left" | "right" };
+/** Where a frame went, and what that means. `null` only ever comes from undo. */
+type Swipe = { score: Verdict | null; direction: "up" | "down" | "left" | "right" };
 
 export function ReviewDeck({
   slug,
@@ -45,12 +50,22 @@ export function ReviewDeck({
   const [queue] = useState(() => items);
   const [index, setIndex] = useState(0);
   const [drag, setDrag] = useState({ x: 0, y: 0, active: false });
-  const [exiting, setExiting] = useState<Verdict | null>(null);
+  const [exiting, setExiting] = useState<Swipe | null>(null);
   const [history, setHistory] = useState<{ id: string; previous: number | null }[]>([]);
   const [muted, setMuted] = useState(true);
 
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
+
+  /**
+   * The queue is frozen, but a shot turned upright in the deck has to look
+   * upright in the deck — so which way round a file is comes from the live
+   * data rather than from the snapshot the review started with.
+   */
+  const rotations = useMemo(
+    () => new Map(items.map((i) => [i.id, i.rotation])),
+    [items],
+  );
 
   const current = queue[index] ?? null;
   const upNext = queue[index + 1] ?? null;
@@ -63,7 +78,7 @@ export function ReviewDeck({
   }, [tiers]);
 
   const commit = useCallback(
-    (verdict: Verdict) => {
+    (verdict: Swipe) => {
       const item = queue[index];
       if (!item || exiting) return;
 
@@ -97,23 +112,25 @@ export function ReviewDeck({
       void reactAction(slug, {
         targetType: "media",
         targetId: last.id,
-        score: (last.previous as 1 | 2 | 3 | null) ?? null,
+        score: last.previous as Verdict | null,
       });
     }
   }, [index, exiting, history, slug]);
 
   useEffect(() => () => { if (exitTimer.current) clearTimeout(exitTimer.current); }, []);
 
+  // Escape, the trap and the scroll lock come from the hook. It focuses the
+  // container rather than a button on purpose: the verdicts are Space and the
+  // arrows, and a focused button would eat every one of them.
+  const dialogRef = useDialog<HTMLDivElement>(onClose);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       switch (e.key) {
-        case "Escape":
-          onClose();
-          break;
         case "ArrowLeft":
         case " ":
           e.preventDefault();
-          commit({ score: null, direction: "left" });
+          commit({ score: PASS_SCORE, direction: "left" });
           break;
         case "ArrowDown":
         case "1":
@@ -138,15 +155,11 @@ export function ReviewDeck({
       }
     }
     window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [commit, undo, onClose]);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [commit, undo]);
 
   /** Which way the current drag is leaning, if it's leaning far enough to count. */
-  const leaning = useMemo<Verdict | null>(() => {
+  const leaning = useMemo<Swipe | null>(() => {
     if (!drag.active) return null;
     const { x, y } = drag;
     if (Math.abs(y) > Math.abs(x)) {
@@ -155,7 +168,7 @@ export function ReviewDeck({
       return null;
     }
     if (x > SWIPE_THRESHOLD) return { score: 2, direction: "right" };
-    if (x < -SWIPE_THRESHOLD) return { score: null, direction: "left" };
+    if (x < -SWIPE_THRESHOLD) return { score: PASS_SCORE, direction: "left" };
     return null;
   }, [drag]);
 
@@ -172,7 +185,14 @@ export function ReviewDeck({
   })();
 
   return (
-    <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Screening the dailies"
+      tabIndex={-1}
+      className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950 focus:outline-none"
+    >
       <header className="pt-safe px-safe shrink-0 border-b border-[color:var(--hair-dark)]">
         <div className="flex items-center gap-2 px-4 py-2.5 sm:items-end sm:gap-4 sm:py-3 sm:px-6">
           <div className="min-w-0 flex-1">
@@ -196,6 +216,7 @@ export function ReviewDeck({
             disabled={index === 0}
             className="btn-quiet-dark shrink-0 px-2"
             title="Undo the last mark (Z)"
+            aria-label="Undo the last mark"
           >
             ↩<span className="ml-1 hidden sm:inline">Undo</span>
           </button>
@@ -221,7 +242,10 @@ export function ReviewDeck({
             {/* The next frame, peeking through — a deck should feel like a deck. */}
             {upNext && (
               <Card
+                slug={slug}
                 item={upNext}
+                tiers={tiers}
+                rotation={rotations.get(upNext.id) ?? upNext.rotation}
                 muted
                 crew={crew}
                 className="absolute opacity-30"
@@ -232,8 +256,12 @@ export function ReviewDeck({
             {current && (
               <Card
                 key={current.id}
+                slug={slug}
                 item={current}
+                tiers={tiers}
+                rotation={rotations.get(current.id) ?? current.rotation}
                 muted={muted}
+                active
                 crew={crew}
                 className={cn(
                   "absolute touch-none select-none",
@@ -281,7 +309,8 @@ export function ReviewDeck({
                 label="Pass"
                 hint="←"
                 marks="—"
-                onClick={() => commit({ score: null, direction: "left" })}
+                active={current?.reactions.mine === PASS_SCORE}
+                onClick={() => commit({ score: PASS_SCORE, direction: "left" })}
               />
               {tiers.map((tier) => (
                 <VerdictKey
@@ -300,7 +329,7 @@ export function ReviewDeck({
                 />
               ))}
             </div>
-            <p className="mt-2 text-center font-mono text-2xs uppercase tracking-label text-ink-500">
+            <p className="mt-2 text-center font-mono text-2xs uppercase tracking-label text-ink-400">
               <span className="sm:hidden">Swipe the frame, or tap a verdict</span>
               <span className="hidden sm:inline">Swipe the frame, or use the arrow keys</span>
             </p>
@@ -313,8 +342,12 @@ export function ReviewDeck({
 }
 
 function Card({
+  slug,
   item,
+  tiers,
+  rotation,
   muted,
+  active,
   crew,
   className,
   style,
@@ -322,16 +355,23 @@ function Card({
   onToggleSound,
   ...handlers
 }: {
+  slug: string;
   item: MediaItemView;
+  tiers: ReactionTier[];
+  /** Live, not from the frozen queue. */
+  rotation: number;
   muted: boolean;
+  /** The card being judged. The one peeking behind it shouldn't play. */
+  active?: boolean;
   crew?: number;
   className?: string;
   style?: React.CSSProperties;
   overlay?: React.ReactNode;
   onToggleSound?: () => void;
 } & React.HTMLAttributes<HTMLDivElement>) {
-  const src = item.kind === "video" ? item.proxyUrl ?? item.originalUrl : item.originalUrl;
-  const others = item.reactions.count - (item.reactions.mine === null ? 0 : 1);
+  const src = previewSrc(item);
+  const mineIsMark = item.reactions.mine !== null && item.reactions.mine >= 1;
+  const others = item.reactions.supporters - (mineIsMark ? 1 : 0);
 
   return (
     <div
@@ -344,27 +384,26 @@ function Card({
     >
       <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-ink-950">
         {src ? (
-          item.kind === "video" ? (
-            <video
-              src={src}
-              poster={item.thumbnailUrl ?? undefined}
-              autoPlay
-              loop
-              muted={muted}
-              playsInline
-              className="h-full w-full object-contain"
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={src}
-              alt={item.originalFilename}
-              draggable={false}
-              className="print-tone h-full w-full object-contain"
-            />
-          )
+          <RotatedMedia rotation={rotation}>
+            {item.kind === "video" ? (
+              <DeckVideo
+                src={src}
+                poster={item.thumbnailUrl}
+                muted={muted}
+                active={active}
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={src}
+                alt={item.originalFilename}
+                draggable={false}
+                className="print-tone h-full w-full object-contain"
+              />
+            )}
+          </RotatedMedia>
         ) : (
-          <p className="font-mono text-2xs uppercase tracking-label text-ink-500">Developing…</p>
+          <p className="font-mono text-2xs uppercase tracking-label text-ink-400">Developing…</p>
         )}
 
         {overlay}
@@ -381,10 +420,12 @@ function Card({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {others > 0 && (
-            <span className="tag-dark">
-              {crew ? `${others} of ${crew} marked it` : `${others} marked it`}
-            </span>
+          {others > 0 && <CrewBreakdown item={item} tiers={tiers} crew={crew} />}
+          {/* Sideways footage is noticed here, full screen, and nowhere else.
+              Asking anybody to remember it until they reach the bench is how it
+              never gets fixed. */}
+          {active && (
+            <RotateButton slug={slug} mediaItemId={item.id} className="btn-outline-dark px-2 py-1" />
           )}
           {item.kind === "video" && onToggleSound && (
             <button
@@ -404,15 +445,146 @@ function Card({
   );
 }
 
+/**
+ * The frame, playing.
+ *
+ * `<video autoPlay muted>` written as JSX does not reliably autoplay: React
+ * assigns `muted` as a DOM property during commit, while the browser's
+ * autoplay gate reads the *attribute* as the element begins loading. Chrome
+ * therefore saw an unmuted video asking to play by itself and refused — and
+ * since the element carried no controls, a refusal left a poster frame and no
+ * way at all to watch the shot. The attribute is now hardcoded so the gate is
+ * satisfied at load, and the live mute state rides the property, which
+ * overrides it.
+ *
+ * The cover catches every other reason a browser might still say no. A deck
+ * you can't play videos in is a deck that can only judge photographs.
+ */
+function DeckVideo({
+  src,
+  poster,
+  muted,
+  active,
+}: {
+  src: string;
+  poster: string | null;
+  muted: boolean;
+  active?: boolean;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [blocked, setBlocked] = useState(false);
+
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    video.muted = muted;
+
+    // The card behind is a glimpse of the next shot, not a second thing
+    // playing at you.
+    if (!active) {
+      video.pause();
+      return;
+    }
+    void video.play().then(
+      () => setBlocked(false),
+      () => setBlocked(true),
+    );
+  }, [src, muted, active]);
+
+  return (
+    <>
+      <video
+        ref={ref}
+        src={src}
+        poster={poster ?? undefined}
+        loop
+        muted
+        playsInline
+        className="h-full w-full object-contain"
+      />
+      {blocked && active && (
+        <button
+          // The frame under this is a swipe target; a tap to play must not
+          // read as the start of a verdict.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            void ref.current?.play().then(() => setBlocked(false), () => {});
+          }}
+          className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ink-950/45"
+          aria-label="Play this shot"
+        >
+          <span aria-hidden className="flex h-14 w-14 items-center justify-center border border-paper-100/70 font-mono text-xl text-paper-100">
+            ▶
+          </span>
+          <span className="font-mono text-2xs uppercase tracking-label text-paper-200">
+            Tap to play
+          </span>
+        </button>
+      )}
+    </>
+  );
+}
+
+/**
+ * How the crew already stands, full size.
+ *
+ * The light table only has room for a tint in the corner of a cell; here there
+ * is space to say which mark it was. Bars are read against the crew, not
+ * against each other, so one Hero out of five looks like one out of five
+ * rather than like a landslide.
+ */
+function CrewBreakdown({
+  item,
+  tiers,
+  crew,
+}: {
+  item: MediaItemView;
+  tiers: ReactionTier[];
+  crew?: number;
+}) {
+  const crewSize = Math.max(crew ?? 0, item.reactions.count, 1);
+
+  return (
+    <div className="flex items-center gap-2">
+      {tiers.map((tier) => {
+        const count = item.reactions.breakdown[tier.score] ?? 0;
+        const mine = item.reactions.mine === tier.score;
+        return (
+          <div
+            key={tier.score}
+            className="flex w-9 flex-col gap-1"
+            title={`${tier.label} — ${count} of ${crewSize} of the crew`}
+          >
+            <div className="flex items-baseline justify-between font-mono text-2xs leading-none">
+              <span className={count > 0 ? "text-paper-200" : "text-ink-500"}>{tier.emoji}</span>
+              <span className={count > 0 ? "text-paper-200" : "text-ink-500"}>{count}</span>
+            </div>
+            <div className="h-[3px] w-full bg-ink-700">
+              <div
+                className={cn("h-full", mine ? "bg-signal-500" : "bg-paper-200/70")}
+                style={{ width: `${(Math.min(1, count / crewSize) * 100).toFixed(1)}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** The rubber stamp that tells you what letting go would do. */
 function VerdictStamp({
   verdict,
   tiers,
 }: {
-  verdict: Verdict;
+  verdict: Swipe;
   tiers: Map<number, ReactionTier>;
 }) {
-  const tier = verdict.score ? tiers.get(verdict.score) : null;
+  const tier =
+    verdict.score === null || verdict.score === PASS_SCORE
+      ? null
+      : (tiers.get(verdict.score) ?? null);
   const position = {
     up: "top-8 left-1/2 -translate-x-1/2",
     down: "bottom-8 left-1/2 -translate-x-1/2",
@@ -457,8 +629,12 @@ function VerdictKey({
       title={`${label} (${hint})`}
       className={cn(
         "flex min-h-[56px] flex-col items-center justify-center gap-1 bg-ink-900 px-1 py-3 transition-colors active:translate-y-px",
+        // A pass you've already given should read as settled, not as a fourth
+        // mark — so it lights up in ink rather than in the cut line's red.
         active
-          ? "bg-signal-600 text-paper-50"
+          ? signal
+            ? "bg-signal-600 text-paper-50"
+            : "bg-ink-700 text-paper-100"
           : signal
             ? "text-paper-200 hover:bg-signal-700 hover:text-paper-50"
             : "text-ink-400 hover:bg-ink-800 hover:text-paper-200",
