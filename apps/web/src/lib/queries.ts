@@ -111,10 +111,23 @@ async function loadSelections(vlogId: string) {
   return map;
 }
 
+/**
+ * Marks that were the default when a vlog was made. A vlog stores its tiers at
+ * creation, so a redesign of the defaults would otherwise only ever reach new
+ * vlogs; a stored set that matches any past default is read as "whatever the
+ * defaults are now", and only a deliberately customised set is kept.
+ */
+const LEGACY_DEFAULT_MARKS: readonly (readonly string[])[] = [
+  ["\u25CF", "\u25CF\u25CF", "\u25CF\u25CF\u25CF"],
+  ["\u{1F642}", "\u{1F525}", "\u{1F929}"],
+];
+
 export function reactionTiersFor(vlog: Vlog): ReactionTier[] {
   const tiers = vlog.reactionTiers;
-  if (Array.isArray(tiers) && tiers.length === 3) return tiers;
-  return DEFAULT_REACTIONS;
+  if (!Array.isArray(tiers) || tiers.length !== 3) return DEFAULT_REACTIONS;
+  const marks = tiers.map((t) => t.emoji);
+  const legacy = LEGACY_DEFAULT_MARKS.some((set) => set.every((m, i) => m === marks[i]));
+  return legacy ? DEFAULT_REACTIONS : tiers;
 }
 
 export async function getMediaItems(

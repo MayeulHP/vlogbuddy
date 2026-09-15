@@ -27,6 +27,7 @@ import { useIsTouch } from "@/hooks/use-media-query";
 import { RotatedMedia } from "@/lib/rotated-media";
 import { makeSnap, quantize } from "@/lib/snap";
 import { useDialog } from "@/hooks/use-dialog";
+import { AnchoredPopover } from "./anchored-popover";
 import { cn } from "@/lib/cn";
 import type { Selection } from "./selection";
 
@@ -57,7 +58,7 @@ import type { Selection } from "./selection";
  * paints: the edge of a shot is a 1px idea and a thumb is not.
  */
 const LANES = {
-  desk: { ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]", grip: 14, marker: 16 },
+  desk: { ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]", grip: 14, marker: 24 },
   touch: { ruler: 26, layer: 44, base: 88, audio: 40, gutter: "w-[52px]", grip: 26, marker: 24 },
 } as const;
 
@@ -70,8 +71,8 @@ const LANES = {
  * words the inspector uses, cut down rather than renamed.
  */
 const LANE_NAMES = {
-  desk: { picture: "Picture", layer: (n: number) => `Layer ${n}`, bed: "Bed", cue: (n: number) => `Snd ${n}`, bpm: (b: number) => `${b} bpm` },
-  touch: { picture: "Pic", layer: (n: number) => `L${n}`, bed: "Bed", cue: (n: number) => `S${n}`, bpm: (b: number) => `${b}` },
+  desk: { picture: "Picture", layer: (n: number) => `Layer ${n}`, bed: "Music", cue: (n: number) => `Sound ${n}`, bpm: (b: number) => `${b} bpm` },
+  touch: { picture: "Pic", layer: (n: number) => `L${n}`, bed: "Music", cue: (n: number) => `S${n}`, bpm: (b: number) => `${b}` },
 } as const;
 
 /**
@@ -96,6 +97,18 @@ const MAX_SCALE = 140;
 const PAGE_INSET = 0.15;
 
 
+/**
+ * What the strip toolbar can add. One order, one set of words, used by the
+ * buttons here and by the phone's sheet — so the two can't drift apart.
+ */
+export type AddKind = "shot" | "layer" | "sound";
+
+export const ADD_KINDS: { kind: AddKind; label: string }[] = [
+  { kind: "shot", label: "+ Shot" },
+  { kind: "layer", label: "+ Layer" },
+  { kind: "sound", label: "+ Sound" },
+];
+
 /** Past this the pointer is dragging, under it it's still a tap that selects. */
 const DRAG_SLOP = 4;
 
@@ -112,6 +125,10 @@ export function TimelineTracks({
   playheadTime,
   onSeek,
   onBackToGather,
+  addOpen,
+  onAddOpenChange,
+  renderAddPicker,
+  anchoredPickers,
   className,
 }: {
   timeline: TimelineDoc;
@@ -127,6 +144,17 @@ export function TimelineTracks({
   playheadTime: number;
   onSeek: (t: number) => void;
   onBackToGather?: () => void;
+  /**
+   * The three add-verbs live on the strip toolbar because what they add lands
+   * on the strip, but the bench owns the state: below `md` the same pickers
+   * come up as a bottom sheet instead of a popover, and only the bench knows
+   * which it is.
+   */
+  addOpen: AddKind | null;
+  onAddOpenChange: (kind: AddKind | null) => void;
+  renderAddPicker: (kind: AddKind, done: () => void) => React.ReactNode;
+  /** md and up: hang the picker off its button. Below, the bench sheets it. */
+  anchoredPickers: boolean;
   /** The bench hands the strip the leftover height under the picture. */
   className?: string;
 }) {
@@ -590,9 +618,46 @@ export function TimelineTracks({
   return (
     <section className={cn("flex flex-col border border-[color:var(--hair-dark)] bg-ink-850", className)}>
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-2 py-1.5 sm:px-3 sm:py-2">
-        <p className="eyebrow-light">Reel 02 · Strip</p>
+        {/*
+          The verbs sit on the thing they act on. "Reel 02 · Strip" was
+          decoration in the one place a friend looks for "how do I add
+          something?", and the answer used to be two tabs away in a side column
+          that duplicated the lanes.
+        */}
+        <div className="flex min-w-0 items-center gap-1">
+          {ADD_KINDS.map(({ kind, label }) => {
+            const open = addOpen === kind;
+            return (
+              <div key={kind} className="relative shrink-0">
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => onAddOpenChange(open ? null : kind)}
+                  className={cn(
+                    "flex min-h-[34px] items-center border px-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                    open
+                      ? "border-paper-100 bg-paper-100 text-ink-900"
+                      : "border-[color:var(--hair-dark)] text-ink-300 hover:bg-ink-800 hover:text-paper-100",
+                  )}
+                >
+                  {label}
+                </button>
+                {open && anchoredPickers && (
+                  <AnchoredPopover
+                    label={label}
+                    onClose={() => onAddOpenChange(null)}
+                    style={{ width: 300 }}
+                    className="left-0 top-full mt-1"
+                  >
+                    {renderAddPicker(kind, () => onAddOpenChange(null))}
+                  </AnchoredPopover>
+                )}
+              </div>
+            );
+          })}
+        </div>
         <div className="flex items-center gap-2">
-          <p className="eyebrow-light hidden lg:block">
+          <p className="eyebrow-light hidden xl:block">
             Drag shots to reorder · drag their edges to trim
           </p>
           <div className="flex items-stretch border border-[color:var(--hair-dark)]">
@@ -665,7 +730,7 @@ export function TimelineTracks({
             >
               <span
                 className="eyebrow-light truncate"
-                title={track.role === "bed" ? "Bed" : `Sound ${i + 1}`}
+                title={track.role === "bed" ? "Music" : `Sound ${i + 1}`}
               >
                 {track.role === "bed" ? names.bed : names.cue(i + 1)}
               </span>
@@ -1026,10 +1091,16 @@ export function TimelineTracks({
                 grips underneath it keep their full hit zone.
               */}
               {!dragging &&
-                timeline.clips.slice(1).map((clip) => {
+                timeline.clips.slice(1).map((clip, i) => {
                   const at = (live.starts[clip.id] ?? 0) * scale;
                   const over = overlapsPrevious(clip.transitionIn);
                   const open = transitionAt === clip.id;
+                  // A cut belongs to the two shots either side of it, so
+                  // selecting either one lights it: the shot you're working on
+                  // shows you the join you can change.
+                  const adjacent =
+                    selection.kind === "clip" &&
+                    (selection.id === clip.id || selection.id === timeline.clips[i]?.id);
                   return (
                     <button
                       key={`cut-${clip.id}`}
@@ -1053,10 +1124,16 @@ export function TimelineTracks({
                         over || open
                           ? "border-tape-500 bg-ink-950/90 text-paper-100"
                           : "border-ink-600 bg-ink-950/70 text-ink-400",
-                        // A hard cut is the norm and shouldn't litter the
-                        // strip with badges — but a phone has no hover, so
-                        // there it stays faintly visible or it can't be found.
-                        !over && !open && (touch ? "opacity-50" : "opacity-0 hover:opacity-100 focus-visible:opacity-100"),
+                        // A hard cut is the norm and shouldn't shout, but it
+                        // was invisible until hovered and nobody finds a
+                        // control they can't see. Half-lit always — on a
+                        // pointer as on a phone — and full when you're either
+                        // on it or on a shot it joins.
+                        !over &&
+                          !open &&
+                          (adjacent
+                            ? "opacity-100"
+                            : "opacity-50 hover:opacity-100 focus-visible:opacity-100"),
                       )}
                     >
                       <span aria-hidden>{over ? TRANSITION_GLYPHS[clip.transitionIn] : "◆"}</span>

@@ -30,6 +30,7 @@ import type { MediaItemView } from "@/lib/queries";
 import { RotateButton } from "@/components/rotate-button";
 import { TrimBar, round2 } from "./trim-bar";
 import { Section } from "./section";
+import { KBD_HINT } from "./kbd";
 import { SliderField } from "./slider-field";
 import type { PreviewTransport } from "./preview-player";
 import { cn } from "@/lib/cn";
@@ -386,6 +387,7 @@ export function ClipInspector({
               className="btn-outline-dark w-full"
             >
               Split at the playhead
+              <kbd className={KBD_HINT}>S</kbd>
             </button>
             <p className="mt-1 text-2xs leading-relaxed text-ink-400">
               {canSplit
@@ -829,6 +831,7 @@ export function ClipInspector({
             className="btn border-signal-700/50 bg-signal-900/30 w-full text-signal-300 hover:border-signal-500 hover:bg-signal-900/60"
           >
             Take this shot out
+            <kbd className={KBD_HINT}>⌫</kbd>
           </button>
           <p className="mt-1 text-2xs text-ink-400">
             Drops it from the cut. Nothing is deleted — bring it back from the Trip page.

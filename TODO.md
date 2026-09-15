@@ -223,7 +223,7 @@ UX, in order:
       size, and a fill-plus-count instead of the 3px weight bar.
 - [ ] Phone contact-sheet cards: three 34px mark cells overflow the ~88px frame
       (pre-existing). Narrower coarse floor, or tap-to-open marks on phone cards.
-- [ ] Vlogs created before the grease-pencil change keep legacy emoji tiers in
+- [x] Vlogs created before the grease-pencil change keep legacy emoji tiers in
       `vlogs.reaction_tiers` with no way to reset them.
 
 Features that make it a complete tool:
@@ -247,11 +247,11 @@ Features that make it a complete tool:
 
 ## Film page — menu system (2026-09-15 audit, full report in docs/film-menu-audit-2026-09-15.md)
 
-- [ ] **Toolbar owns the room's chrome.** (S) Drop "← Back to the floor" from the
+- [x] **Toolbar owns the room's chrome.** (S) Drop "← Back to the floor" from the
       toolbar (keep it in the empty-strip state); span the row across the main
       column instead of the preview's maxWidth; left Undo/Redo/?, right
       "1:12 · 18 shots" + Film settings + Print. Hide "?" below md.
-- [ ] **Strip toolbar gets the verbs.** (M) Replace the Layers and Mix tabs with
+- [x] **Strip toolbar gets the verbs.** (M) Replace the Layers and Mix tabs with
       `+ Shot` / `+ Layer` / `+ Sound` buttons on the strip toolbar; each opens the
       existing picker as an anchored popover (desk) or bottom sheet (phone).
       Delete "Reel 02 · Strip". The lanes are the list — no panel duplicates them.
@@ -264,24 +264,26 @@ Features that make it a complete tool:
       survives (arrow keys, aria-controls, 12px labels, ≥40px tall). Selection no
       longer force-switches panels; the Pile picker shows its anchor ("after shot
       04 ▾") and defaults to the shot under the playhead.
-- [ ] **Phone editor is a fixed viewport.** (L) Preview ≤40dvh, strip fills the
+- [x] **Phone editor is a fixed viewport.** (L) Preview ≤40dvh, strip fills the
       rest and scrolls horizontally only; tool row (+ Shot, + Layer, + Sound, ⚙)
       under the transport; every secondary panel is the bottom sheet the inspector
       already uses; sheet content gets a sticky footer for the Take-out/Done row.
-- [ ] **Cut marker you can find.** (S) 24px on desk as on touch; hard cuts at ~50%
+- [x] **Cut marker you can find.** (S) 24px on desk as on touch; hard cuts at ~50%
       opacity always, 100% on hover or when an adjacent shot is selected. Inspector
       Transition section shrinks to a one-line summary that focuses the marker.
 - [ ] **44px everywhere it's tapped.** (S) Transport Play 36/44; "Play this shot",
       −5s/+5s/Use all, Pile filter, Film checkboxes → `.btn`-derived classes so the
       touch media query applies; checkbox rows full-width ≥40px.
-- [ ] **Compact masthead on Film.** (M) One 48px row (wordmark · title · segmented
+- [x] **Compact masthead on Film** (desktop; the phone masthead is still ~110px). (M) One 48px row (wordmark · title · segmented
       Trip/Film/Watch · presence · share); the slate line and display rail stay on
       Trip only. Frees ~80px, which at 1280×720 is the difference between a 444px
       and a 590px picture.
-- [ ] **Shortcuts on the controls.** (S) kbd hint on Split (S), Take out (⌫), Undo
+- [x] **Shortcuts on the controls.** (S) kbd hint on Split (S), Take out (⌫), Undo
       (⌘Z) buttons; keep the "?" card as the index.
 - [ ] **One name per thing.** (S) "Trip" not "the floor"/"the Trip page"; "Music"
       not "Bed"; "Sound n" not "Cue/Snd"; "Muted" not "Held out"; "marks" not
       "rank"; sheet titles = inspector header; tab counts use the rail's chip.
 - [ ] **Gutter labels by width.** (S) Icons at 52px, words at 74px, instead of
       `Pic / L1 / Bed`.
+- [ ] Phone leftovers: collapse the masthead on Film below md; the clip
+      inspector renders its own "Take this shot out" under the sheet's sticky one.

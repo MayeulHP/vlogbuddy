@@ -529,6 +529,29 @@ body {
   .check {
     @apply h-5 w-5;
   }
+  /*
+   * The bench's hand-rolled controls.
+   *
+   * The transport's play button, the inspector's "Play this shot" / −5s / +5s /
+   * "Use all", the pile's filter chips and the strip's zoom row are all bespoke
+   * borders rather than `.btn`, so the rule above never reached them and they
+   * stayed 22–27px under a thumb. `.touch-bench` on the bench root grows them
+   * in one place instead of thirty.
+   *
+   * Absolutely positioned buttons are exempt: the clip blocks, trim grips, cut
+   * markers and layer bars are *drawn* on the timeline at a height the lane
+   * decides, and a min-height would push them out of their lane. They already
+   * have their own touch sizes in `LANES.touch`.
+   */
+  .touch-bench button:not([class*="absolute"]),
+  .touch-bench [role="tab"] {
+    min-height: 44px;
+  }
+  /* A 13px checkbox is a 13px target; the row it sits on is the real one. */
+  .touch-bench label:has(> input[type="checkbox"]) {
+    min-height: 44px;
+    align-items: center;
+  }
   .mark-sm {
     min-height: 30px;
     min-width: 34px;

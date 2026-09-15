@@ -43,8 +43,12 @@ export function WorkspaceNav({
   onTab: (tab: WorkspaceTab) => void;
   state: VlogState;
   counts: { clips: number; unrated: number; hasRender: boolean };
-  /** `rail` under the masthead (desktop), `bar` fixed to the bottom (phone). */
-  variant?: "rail" | "bar";
+  /**
+   * `rail` under the masthead (desktop), `bar` fixed to the bottom (phone),
+   * `segment` inline in a collapsed masthead — same three rooms, shrunk to a
+   * segmented control so the bench gets the ~80px the display rail was using.
+   */
+  variant?: "rail" | "bar" | "segment";
 }) {
   const rendering = state === "export";
   const locked = rendering || state === "published";
@@ -67,6 +71,43 @@ export function WorkspaceNav({
     if (disabled) return;
     onTab(candidate);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  if (variant === "segment") {
+    return (
+      <nav
+        aria-label="Production"
+        className="flex items-stretch border border-[color:var(--hair-strong)]"
+      >
+        {visible.map((candidate) => {
+          const active = candidate === tab;
+          const disabled = locked && candidate !== "watch";
+          const mark = badge[candidate];
+
+          return (
+            <button
+              key={candidate}
+              onClick={() => choose(candidate, disabled)}
+              disabled={disabled}
+              aria-current={active ? "page" : undefined}
+              title={disabled ? lockReason : WORKSPACE_TAB_BLURBS[candidate]}
+              className={cn(
+                "flex min-h-[32px] items-center gap-1.5 border-r border-[color:var(--hair-strong)] px-2.5 font-mono text-2xs uppercase leading-none tracking-label transition-colors last:border-r-0",
+                active
+                  ? "bg-ink-900 text-paper-100"
+                  : "text-ink-600 hover:bg-paper-200 hover:text-ink-900",
+                disabled && "cursor-not-allowed opacity-30",
+              )}
+            >
+              {WORKSPACE_TAB_LABELS[candidate]}
+              {mark && (
+                <span className={cn(active ? "text-signal-400" : "text-ink-500")}>{mark}</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    );
   }
 
   if (variant === "bar") {

@@ -118,7 +118,14 @@ export function VlogShell(props: VlogShellProps) {
    * screen at once, nothing below the fold. The page itself stops scrolling and
    * the column flex hands the editor whatever the (sticky, and therefore
    * self-measuring) masthead and the footer leave behind — no header height is
-   * written down anywhere, so it can't go stale. Phones keep the stacked flow.
+   * written down anywhere, so it can't go stale.
+   *
+   * Phones too, now. A stacked bench on a phone was a 1713px scroll whose
+   * panels started below the fold, which is the one place a panel about the
+   * shot you just tapped can't be; the room is the same fixed viewport there,
+   * with the picture capped and the strip taking the rest. The sync footer goes
+   * — it is a status line, and on a phone the bottom bar is already sitting
+   * where it would be — so `main` carries the bar's clearance itself.
    */
   const fixed = effectiveTab === "edit";
 
@@ -126,14 +133,59 @@ export function VlogShell(props: VlogShellProps) {
     <div
       className={cn(
         "flex min-h-screen flex-col",
-        fixed && "md:h-dvh md:min-h-0 md:overflow-hidden",
+        fixed && "h-dvh min-h-0 overflow-hidden",
         dark ? "bg-ink-900" : "bg-paper-100",
       )}
     >
       {/* ---------- masthead: always paper, whatever room you're in ---------- */}
       <header className="pt-safe px-safe sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-7">
-          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-2.5 sm:pt-3">
+          {/*
+            On the bench the masthead is overhead: the room has its own toolbar,
+            and every pixel of preamble is a pixel of strip. So at md+ it
+            collapses to one row — who we are, which film, which room, who else
+            is here — and the slate line and the display rail stay on the Trip
+            page, where the counts are the point. Phones keep the tall masthead;
+            they get their rooms from the bottom bar either way.
+          */}
+          {fixed && (
+            <div className="hidden min-h-[48px] items-center gap-3 md:flex">
+              <Wordmark size="sm" className="shrink-0" />
+              <span
+                aria-hidden
+                className="h-4 w-px shrink-0 bg-[color:var(--hair-strong)]"
+              />
+              <h1 className="headline min-w-0 flex-1 truncate text-lg leading-none">
+                {vlog.title}
+              </h1>
+              <WorkspaceNav
+                tab={effectiveTab}
+                onTab={setTab}
+                state={state}
+                variant="segment"
+                counts={{
+                  clips: props.timeline.clips.length,
+                  unrated,
+                  hasRender: Boolean(props.latestRender),
+                }}
+              />
+              {state === "export" && (
+                <span className="flex shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-label text-signal-700">
+                  <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-signal-600" />
+                  Rendering — locked
+                </span>
+              )}
+              <PresenceBar presence={presence} connected={connected} selfId={member.id} />
+              <ShareBar shareUrl={shareUrl} />
+            </div>
+          )}
+
+          <div
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-2.5 sm:pt-3",
+              fixed && "md:hidden",
+            )}
+          >
             <div className="flex min-w-0 flex-1 items-baseline gap-2 sm:gap-3">
               <Wordmark size="sm" className="hidden shrink-0 sm:inline-flex" />
               <span
@@ -154,7 +206,7 @@ export function VlogShell(props: VlogShellProps) {
           </div>
 
           {/* Slate line — the numbers, in mono, never shouting. */}
-          <div className="scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0">
+          <div className={cn(fixed && "md:hidden", "scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0")}>
             {[
               `${media.length} clip${media.length === 1 ? "" : "s"}`,
               `${music.length} track${music.length === 1 ? "" : "s"}`,
@@ -169,7 +221,7 @@ export function VlogShell(props: VlogShellProps) {
           </div>
 
           {/* On a phone the same three rooms live in the bottom bar instead. */}
-          <div className="mt-2 hidden md:block">
+          <div className={cn("mt-2 hidden md:block", fixed && "md:hidden")}>
             <WorkspaceNav
               tab={effectiveTab}
               onTab={setTab}
@@ -187,7 +239,10 @@ export function VlogShell(props: VlogShellProps) {
       <main
         className={cn(
           "mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-7 sm:py-7",
-          fixed && "md:min-h-0 md:overflow-hidden md:py-4",
+          fixed && "min-h-0 overflow-hidden md:py-4",
+          // The bottom bar is fixed, so it takes no room in the flow; below
+          // `md` the bench's own last pixel would otherwise sit under it.
+          fixed && "max-md:px-2 max-md:py-2 max-md:pb-[calc(56px+env(safe-area-inset-bottom,0px))]",
         )}
       >
         {effectiveTab === "gather" && (
@@ -244,6 +299,7 @@ export function VlogShell(props: VlogShellProps) {
       <footer
         className={cn(
           "pb-rail border-t px-4 py-3 sm:px-7",
+          fixed && "max-md:hidden",
           dark ? "border-[color:var(--hair-dark)]" : "border-[color:var(--hair)]",
         )}
       >

@@ -83,8 +83,10 @@ export function PileDrawer({
   return (
     <section>
       <div className="flex items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2">
-        <p className="min-w-0 flex-1 font-mono text-2xs uppercase tracking-label text-ink-400">
-          Left out of the cut
+        <p className="min-w-0 flex-1 truncate font-mono text-2xs uppercase tracking-label text-ink-400">
+          {/* "Here" is the shot under the playhead; the row is too narrow to
+              say so twice, so the buttons' tooltips carry the detail. */}
+          {currentLabel ? `Here = after ${currentLabel}` : "Left out of the cut"}
         </p>
         <div className="flex shrink-0 items-stretch border border-[color:var(--hair-dark)]">
           {(["all", "photo", "video"] as const).map((k) => (
@@ -166,7 +168,9 @@ export function PileDrawer({
                       : "Pick a shot on the strip first"
                   }
                 >
-                  Add after {currentLabel ?? "the current shot"}
+                  {/* Where you're looking is where you meant it to go: the
+                      button names the place, not the operation. */}
+                  Add here
                 </button>
                 <button
                   type="button"

@@ -6,6 +6,7 @@ import {
   applyTimelineOp,
   clipDuration,
   clipStartTimes,
+  formatDuration,
   timelineDuration,
   type AudioTrack,
   type TimelineDoc,
@@ -24,14 +25,15 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { useTimelineHistory, type HistoryAction } from "@/hooks/use-timeline-history";
 import { SHORTCUT_LEGEND, useEditorShortcuts } from "@/hooks/use-editor-shortcuts";
 import { round2 } from "./trim-bar";
+import { KBD_HINT } from "./kbd";
 import { ClipInspector } from "./clip-inspector";
 import { LayerInspector } from "./layer-inspector";
 import { AudioInspector, type SoundState } from "./audio-inspector";
-import { LayerPanel, SoundPanel } from "./stack-panels";
+import { LayerPicker, SoundPicker, BedSettings } from "./stack-panels";
 import { DirectorPanel } from "./director-panel";
 import { FormatPanel } from "./format-panel";
-import { PileDrawer, pileCandidates } from "./pile-drawer";
-import { TimelineTracks, audioTrackLabel } from "./timeline-tracks";
+import { PileDrawer } from "./pile-drawer";
+import { ADD_KINDS, TimelineTracks, audioTrackLabel, type AddKind } from "./timeline-tracks";
 import { PreviewPlayer, audioSrcFor, type PreviewTransport } from "./preview-player";
 import { NO_SELECTION, type Selection } from "./selection";
 import { PrintFilmButton } from "../print-film-button";
@@ -100,6 +102,12 @@ export function EditorView({
    * phone is a panel covering the strip it describes.
    */
   const [sheetOpen, setSheetOpen] = useState(false);
+  /**
+   * The settings that belong to the film rather than to a shot. On a phone they
+   * are the fourth thing on the tool row and arrive as a sheet like everything
+   * else; on a desk they're the side column's Film tab.
+   */
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [playheadTime, setPlayheadTime] = useState(0);
   /**
    * Which panel the side column is showing. A tab strip rather than a stack of
@@ -107,6 +115,16 @@ export function EditorView({
    * shot, and anything that opens above it moves it.
    */
   const [panel, setPanel] = useState<PanelId>("inspector");
+  /**
+   * Which add-picker is open, if any. It lives here rather than on the strip
+   * because the same three pickers are a popover anchored to their button on
+   * `md` and up and a bottom sheet below it — the sheet hangs off the bench,
+   * not off a toolbar that scrolls.
+   *
+   * The phone lane reads this too: `addOpen && asSheet` is the hook for the
+   * sheet, with `addPicker(addOpen)` for its body.
+   */
+  const [addOpen, setAddOpen] = useState<AddKind | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
   const [, startTransition] = useTransition();
@@ -388,6 +406,25 @@ export function EditorView({
       ? round2(playheadTime - clipStart)
       : null;
 
+  /**
+   * Taking the selected thing out of the film. Two ways in — the Delete key and
+   * the phone sheet's footer — and one body, because "back from Trip" and the
+   * bed falling back to dry have to happen whichever one you used.
+   */
+  function dropSelected() {
+    if (selection.kind === "clip" && selectedClip) {
+      dispatch({ type: "clip.remove", clipId: selectedClip.id });
+      setSelection(NO_SELECTION);
+    } else if (selection.kind === "layer" && selected && "opacity" in selected) {
+      dispatch({ type: "layer.remove", layerId: selected.id });
+      setSelection(NO_SELECTION);
+    } else if (selection.kind === "audio" && selected && "role" in selected) {
+      dispatch({ type: "audio.remove", trackId: selected.id });
+      if (selected.role === "bed") chooseBedMusic(null);
+      setSelection(NO_SELECTION);
+    }
+  }
+
   useEditorShortcuts({
     togglePlay: () => togglePlayRef.current?.(),
     nudge: (seconds) =>
@@ -396,19 +433,7 @@ export function EditorView({
     toEnd: () => setPlayheadTime(totalDuration),
     undo,
     redo,
-    removeSelected: () => {
-      if (selection.kind === "clip" && selectedClip) {
-        dispatch({ type: "clip.remove", clipId: selectedClip.id });
-        setSelection(NO_SELECTION);
-      } else if (selection.kind === "layer" && selected && "opacity" in selected) {
-        dispatch({ type: "layer.remove", layerId: selected.id });
-        setSelection(NO_SELECTION);
-      } else if (selection.kind === "audio" && selected && "role" in selected) {
-        dispatch({ type: "audio.remove", trackId: selected.id });
-        if (selected.role === "bed") chooseBedMusic(null);
-        setSelection(NO_SELECTION);
-      }
-    },
+    removeSelected: dropSelected,
     trimIn: () => {
       // A photo has no source to trim into — its head is wherever the shot
       // before it ends — so `[` has nothing to say about one.
@@ -520,9 +545,64 @@ export function EditorView({
     () => new Set(timeline.clips.map((c) => c.mediaItemId)),
     [timeline],
   );
-  const pileCount = useMemo(
-    () => pileCandidates(media, clipMediaIds).length,
-    [media, clipMediaIds],
+  /**
+   * The three pickers the strip toolbar opens, built here so the popover on a
+   * desk and the sheet on a phone are the same component with the same state.
+   */
+  const addPicker = useCallback(
+    (kind: AddKind, done: () => void) => {
+      if (kind === "shot") {
+        return (
+          <PileDrawer
+            media={media}
+            clipMediaIds={clipMediaIds}
+            currentMediaItemId={selectedClip?.mediaItemId ?? null}
+            currentLabel={
+              selectedClip
+                ? `shot ${timeline.clips.findIndex((c) => c.id === selectedClip.id) + 1}`
+                : null
+            }
+            busy={adding || rendering}
+            onAdd={(mediaItemId, after) => {
+              addFromPile(mediaItemId, after);
+              done();
+            }}
+          />
+        );
+      }
+      if (kind === "layer") {
+        return (
+          <LayerPicker
+            timeline={timeline}
+            media={media}
+            playheadTime={playheadTime}
+            onDispatch={dispatch}
+            onDone={done}
+          />
+        );
+      }
+      return (
+        <SoundPicker
+          music={music}
+          media={media}
+          playheadTime={playheadTime}
+          onDispatch={dispatch}
+          onDone={done}
+        />
+      );
+    },
+    [
+      media,
+      music,
+      clipMediaIds,
+      selectedClip,
+      timeline,
+      adding,
+      rendering,
+      addFromPile,
+      playheadTime,
+      dispatch,
+    ],
   );
 
   /**
@@ -530,32 +610,85 @@ export function EditorView({
    * it's about to show you rather than what kind of thing it is. On a phone the
    * inspector is the sheet instead, so it isn't offered here at all.
    *
-   * Five tabs, because five is what fits in a 300px column without a scroll —
-   * and a strip that scrolls with no hint of it is a strip whose last tab
-   * doesn't exist. The two you set once and leave — how the auto-cut plays and
-   * what shape it prints in — share one "Film" tab, stacked; the three you
-   * reach for while cutting each keep their own.
+   * Two tabs. Pile, Layers and Mix were all lists of things the strip already
+   * draws, reached from a column instead of from the lanes they describe —
+   * they're the "+ Shot / + Layer / + Sound" buttons on the strip toolbar now.
+   * What's left is the thing you're working on, and the handful of settings
+   * the whole crew shares.
    */
   const tabs: { id: PanelId; label: string; count?: number }[] = [
     ...(asSheet ? [] : [{ id: "inspector" as const, label: inspectorLabel(selection) }]),
-    { id: "pile", label: "Pile", count: pileCount },
-    { id: "layers", label: "Layers", count: timeline.layers.length },
-    { id: "sound", label: "Mix", count: timeline.audio.length },
-    { id: "film", label: "Film" },
+    { id: "film", label: "Film", count: undefined },
   ];
 
   const activePanel = tabs.some((t) => t.id === panel) ? panel : "film";
 
   /**
-   * The bench's whole chrome, on one slim row over the picture. There is no
-   * masthead here any more: on a fixed-viewport bench every line of preamble is
-   * a line of strip you can't see, and the room already says which one it is.
+   * How the film plays and what shape it plays in, stacked in the order you'd
+   * settle them. Both are the whole crew's: printing is the creator's alone,
+   * but what the film looks like isn't.
+   *
+   * Written once and shown twice — the side column's Film tab on a desk, the
+   * ⚙ sheet on a phone — because two copies of a settings panel is two
+   * copies to forget to change.
+   */
+  const filmSettings = (
+    <>
+      <DirectorPanel
+        slug={slug}
+        timeline={timeline}
+        mediaById={mediaById}
+        beat={beat}
+        locked={rendering}
+        bare
+      />
+      {/* The bed is the crew's, not the cutter's — it comes off the vote on the
+          floor — so it sits with the settings rather than with the verbs on the
+          strip. */}
+      <div className="border-t border-[color:var(--hair-dark)]">
+        <BedSettings
+          timeline={timeline}
+          music={music}
+          media={media}
+          onDispatch={dispatch}
+          onChooseBedMusic={chooseBedMusic}
+        />
+      </div>
+      <div className="border-t border-[color:var(--hair-dark)]">
+        <FormatPanel
+          slug={slug}
+          format={format}
+          shortEdge={renderShortEdge}
+          fitPolicy={timeline.director.fitPolicy}
+          layers={timeline.layers.length}
+          locked={rendering}
+          bare
+        />
+      </div>
+    </>
+  );
+
+  /** What the sheet's footer offers to take out, named for what's selected. */
+  const dropLabel =
+    selection.kind === "clip"
+      ? "Take this shot out"
+      : selection.kind === "layer"
+        ? "Take this layer out"
+        : selection.kind === "audio"
+          ? "Take this track out"
+          : null;
+
+  /**
+   * The bench's whole chrome, on one slim row over the picture — and across the
+   * whole column, not just the picture's width, so the one action that changes
+   * the world sits at the right edge of the room rather than floating mid-page.
+   * There is no masthead here any more: on a fixed-viewport bench every line of
+   * preamble is a line of strip you can't see, and the room already says which
+   * one it is. Leaving the room is the rail's job, not the toolbar's — the only
+   * "back" left is the one in the empty strip, where there's nothing else to do.
    */
   const toolbar = (
     <div className="mb-2 flex items-center gap-2">
-      <button onClick={onBackToGather} className="btn-quiet-dark shrink-0">
-        ← Back to the floor
-      </button>
       <button
         type="button"
         onClick={undo}
@@ -564,7 +697,8 @@ export function EditorView({
         title="Undo (⌘Z)"
         className="btn-quiet-dark shrink-0 disabled:opacity-40"
       >
-        ↩
+        ↩<span className="ml-1.5 hidden md:inline">Undo</span>
+        <kbd className={KBD_HINT}>⌘Z</kbd>
       </button>
       <button
         type="button"
@@ -574,11 +708,13 @@ export function EditorView({
         title="Redo (⌘⇧Z)"
         className="btn-quiet-dark shrink-0 disabled:opacity-40"
       >
-        ↪
+        ↪<span className="ml-1.5 hidden md:inline">Redo</span>
+        <kbd className={KBD_HINT}>⌘⇧Z</kbd>
       </button>
       {/* The keys, where the hands already are. A card rather than a page:
-          nobody leaves the bench to look up a shortcut. */}
-      <div className="relative shrink-0">
+          nobody leaves the bench to look up a shortcut. Hidden on a phone,
+          which has no keys to press. */}
+      <div className="relative hidden shrink-0 md:block">
         <button
           type="button"
           onClick={() => setLegendOpen((open) => !open)}
@@ -606,6 +742,15 @@ export function EditorView({
         )}
       </div>
       <span className="min-w-0 flex-1" />
+      {/* How long the film is and how many shots it's made of — the two numbers
+          anyone cutting keeps glancing at. On the toolbar rather than buried in
+          the transport, where the running time was competing with the playhead
+          clock for the same glance. */}
+      <span className="timecode shrink-0 text-2xs text-ink-300">
+        {formatDuration(totalDuration)}
+        <span className="mx-1.5 text-ink-500">·</span>
+        {timeline.clips.length} shot{timeline.clips.length === 1 ? "" : "s"}
+      </span>
       {/* The same trigger sits at the foot of the rough cut on the floor;
           the director's panel locks while the film is on its way. */}
       {isCreator && (
@@ -620,7 +765,17 @@ export function EditorView({
   );
 
   return (
-    <div className="flex flex-col gap-4 md:h-full md:min-h-0 md:gap-3">
+    /*
+      `touch-bench` is the grown-up sizing for a fingertip: the bench is full of
+      hand-rolled 24px buttons that `.btn`'s touch rule never reached, and one
+      class on the room is better than thirty scattered guards. See globals.css.
+
+      `h-full` at every width now, not just `md:` — below `md` the bench is the
+      same fixed viewport it is on a desk: picture, tool row, strip, and the
+      bottom bar. Nothing under the fold, because on a phone the fold is most of
+      the page.
+    */
+    <div className="touch-bench flex h-full min-h-0 flex-col gap-2 md:gap-3">
       {error && (
         <p className="border border-signal-500/40 bg-signal-900/30 px-3 py-2 font-mono text-[11px] text-signal-300">
           {error}
@@ -632,7 +787,7 @@ export function EditorView({
         track is sized by its widest item's min-content, so one stubborn panel
         was making the whole page wider than the phone it was on.
       */}
-      <div className="grid min-h-0 grid-cols-1 gap-4 md:flex-1 md:grid-cols-[minmax(0,1fr)_300px] md:gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_300px] md:gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
         {/*
           Picture over strip, and neither one allowed to push the other off the
           screen: the picture is capped by its own height and the strip takes
@@ -640,7 +795,7 @@ export function EditorView({
           this the strip stretched to match the side column and most of it was
           void.
         */}
-        <div className="flex min-w-0 flex-col gap-3 md:min-h-0">
+        <div className="flex min-h-0 min-w-0 flex-col gap-2 md:gap-3">
           <PreviewPlayer
             toolbar={toolbar}
             /*
@@ -651,7 +806,15 @@ export function EditorView({
              * a strip tall enough to show its picture lane — so the picture
              * gives way first and both stay on screen.
              */
-            heightCap={asSheet ? "56vh" : "max(180px, min(45vh, 100dvh - 470px))"}
+            /*
+             * On a phone: 40dvh and not a pixel more. The picture is the thing
+             * you look at but the strip is the thing you work on, and at 56vh
+             * the strip had nowhere to be but below the fold. `dvh` rather than
+             * `vh` because a mobile browser's toolbars come and go, and a
+             * picture measured against the *large* viewport overflows the small
+             * one the moment the address bar slides back in.
+             */
+            heightCap={asSheet ? "40dvh" : "max(180px, min(45vh, 100dvh - 470px))"}
             timeline={timeline}
             format={format}
             mediaById={mediaById}
@@ -668,6 +831,21 @@ export function EditorView({
             playRangeRef={playRangeRef}
           />
 
+          {/*
+            The film's own settings, on a phone. The three verbs that add to the
+            strip already sit on the strip's toolbar just below this, where the
+            thing they add lands; what has no home on a phone is the side
+            column's Film tab, so it gets the fourth seat on the tool row and
+            opens as a sheet like everything else here.
+          */}
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="flex min-h-[44px] shrink-0 items-center gap-2 border border-[color:var(--hair-dark)] bg-ink-850 px-3 font-mono text-2xs uppercase tracking-label text-ink-300 md:hidden"
+          >
+            <span aria-hidden>⚙</span> Film settings
+          </button>
+
           <TimelineTracks
             timeline={timeline}
             mediaById={mediaById}
@@ -681,12 +859,16 @@ export function EditorView({
             playheadTime={playheadTime}
             onSeek={setPlayheadTime}
             onBackToGather={onBackToGather}
+            addOpen={addOpen}
+            onAddOpenChange={setAddOpen}
+            renderAddPicker={addPicker}
+            anchoredPickers={!asSheet}
             /*
              * Content height, capped at whatever the picture left over. Not
              * `flex-1`: the lanes are ~170px and a strip stretched to 900px is
              * 700px of nothing between you and the rest of the bench.
              */
-            className="min-h-0 md:max-h-full"
+            className="min-h-0 flex-1 md:max-h-full md:flex-none"
           />
         </div>
 
@@ -697,7 +879,11 @@ export function EditorView({
           down the page. Everything else takes its turn in the same box, and
           picking anything brings the inspector straight back.
         */}
-        <aside className="flex min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-850 md:overflow-hidden">
+        {/* Below `md` this column doesn't exist: the inspector is the sheet and
+            the Film tab is the ⚙ on the tool row, so a stacked copy of it here
+            would be the screen-and-a-half of scroll the sheet was built to
+            replace. */}
+        <aside className="hidden min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-850 md:flex md:overflow-hidden">
           <div
             role="tablist"
             aria-label="Bench panels"
@@ -732,106 +918,86 @@ export function EditorView({
             {/* On a phone this same inspector arrives as a sheet instead. */}
             {activePanel === "inspector" && inspector}
 
-            {activePanel === "pile" && (
-              <PileDrawer
-                media={media}
-                clipMediaIds={clipMediaIds}
-                currentMediaItemId={selectedClip?.mediaItemId ?? null}
-                currentLabel={
-                  selectedClip
-                    ? `shot ${timeline.clips.findIndex((c) => c.id === selectedClip.id) + 1}`
-                    : null
-                }
-                busy={adding || rendering}
-                onAdd={addFromPile}
-              />
-            )}
-
-            {activePanel === "layers" && (
-              <LayerPanel
-                timeline={timeline}
-                media={media}
-                mediaById={mediaById}
-                playheadTime={playheadTime}
-                selection={selection}
-                onSelect={choose}
-                onDispatch={dispatch}
-                bare
-              />
-            )}
-
-            {activePanel === "sound" && (
-              <SoundPanel
-                timeline={timeline}
-                music={music}
-                media={media}
-                mediaById={mediaById}
-                musicById={musicById}
-                totalDuration={totalDuration}
-                playheadTime={playheadTime}
-                selection={selection}
-                onSelect={choose}
-                onDispatch={dispatch}
-                onChooseBedMusic={chooseBedMusic}
-                bare
-              />
-            )}
-
-            {/* How the film plays and what shape it plays in, stacked in the
-                order you'd settle them. Both are the whole crew's: printing is
-                the creator's alone, but what the film looks like isn't. */}
-            {activePanel === "film" && (
-              <>
-                <DirectorPanel
-                  slug={slug}
-                  timeline={timeline}
-                  mediaById={mediaById}
-                  beat={beat}
-                  locked={rendering}
-                  bare
-                />
-                <div className="border-t border-[color:var(--hair-dark)]">
-                  <FormatPanel
-                    slug={slug}
-                    format={format}
-                    shortEdge={renderShortEdge}
-                    fitPolicy={timeline.director.fitPolicy}
-                    layers={timeline.layers.length}
-                    locked={rendering}
-                    bare
-                  />
-                </div>
-              </>
-            )}
+            {/* The same settings the ⚙ on the phone's tool row opens — one
+                definition, two places to reach it. */}
+            {activePanel === "film" && filmSettings}
           </div>
         </aside>
       </div>
 
+      {/*
+        The phone's whole second storey. Nothing below the fold, because there
+        is no fold: the bench is a fixed viewport and everything that isn't the
+        picture, the tool row or the strip arrives over it in the same sheet,
+        with the same way out in the same corner.
+      */}
       {asSheet && sheetOpen && selection.kind !== "none" && (
-        <InspectorSheet title={sheetTitle} onClose={() => setSheetOpen(false)}>
+        <BenchSheet
+          title={sheetTitle}
+          onClose={() => setSheetOpen(false)}
+          footer={
+            dropLabel && (
+              <button
+                onClick={() => {
+                  dropSelected();
+                  setSheetOpen(false);
+                }}
+                className="btn-outline-dark w-full border-signal-700/50 text-signal-300 hover:border-signal-500 hover:bg-signal-900/40 hover:text-signal-200"
+              >
+                {dropLabel}
+              </button>
+            )
+          }
+        >
           {inspector}
-        </InspectorSheet>
+        </BenchSheet>
+      )}
+
+      {/* The three pickers, as sheets. The strip's own buttons hold the state;
+          on a desk the same `addPicker` hangs off them as a popover instead. */}
+      {asSheet && addOpen && (
+        <BenchSheet
+          title={ADD_KINDS.find((k) => k.kind === addOpen)?.label ?? "Add"}
+          onClose={() => setAddOpen(null)}
+        >
+          {addPicker(addOpen, () => setAddOpen(null))}
+        </BenchSheet>
+      )}
+
+      {asSheet && settingsOpen && (
+        <BenchSheet title="Film settings" onClose={() => setSettingsOpen(false)}>
+          {filmSettings}
+        </BenchSheet>
       )}
     </div>
   );
 }
 
 /**
- * The inspector, on a phone.
+ * Every secondary panel, on a phone.
  *
  * A 320px side panel doesn't exist at 375px — stacked under a timeline it ends
  * up a screen and a half below the thing it's describing, which is the one
- * place it can't be. So on a phone it comes up over the bench as a sheet, tied
- * to the selection: pick a shot and it's there, close it and the selection is
- * cleared.
+ * place it can't be. So on a phone the bench keeps only the picture, the tool
+ * row and the strip, and everything else comes up over it in this one sheet:
+ * the inspector (tied to the selection — pick a shot and it's there), the three
+ * "+" pickers, and the film's settings. One shape for all of them, so the way
+ * out is always the same word in the same corner.
+ *
+ * The body scrolls, the header and the footer don't: the action that ends the
+ * errand — "Take this shot out", "Done" — has to be reachable without first
+ * reading to the bottom of a panel that is taller than the sheet.
  */
-function InspectorSheet({
+function BenchSheet({
   title,
   onClose,
+  footer,
   children,
 }: {
   title: string;
   onClose: () => void;
+  /** The one action the sheet is for, pinned where a thumb already is. */
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
   // Escape, the scroll lock and putting focus back on the strip all come from
@@ -846,16 +1012,23 @@ function InspectorSheet({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="pb-safe max-h-[72dvh] animate-slide-up overflow-y-auto overscroll-contain border-t border-[color:var(--hair-dark)] bg-ink-900 shadow-deck focus:outline-none"
+        className="pb-safe flex max-h-[72dvh] animate-slide-up flex-col border-t border-[color:var(--hair-dark)] bg-ink-900 shadow-deck focus:outline-none"
       >
-        <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
+        <div className="flex shrink-0 items-center gap-3 border-b border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
           <span aria-hidden className="h-1 w-8 shrink-0 bg-ink-600" />
           <p className="eyebrow-light min-w-0 flex-1 truncate">{title}</p>
           <button onClick={onClose} className="btn-outline-dark px-3" aria-label="Close">
             Done
           </button>
         </div>
-        <div className="p-2">{children}</div>
+        <div className="scrollbar-thin scrollbar-dark min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+          {children}
+        </div>
+        {footer && (
+          <div className="shrink-0 border-t border-[color:var(--hair-dark)] bg-ink-900 px-3 py-2">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -896,7 +1069,7 @@ function soundStateFor(
 
 
 /** The panels the side column can show — one at a time, same box. */
-type PanelId = "inspector" | "pile" | "film" | "layers" | "sound";
+type PanelId = "inspector" | "film";
 
 /** What the inspector is currently about, as a tab can say it. */
 function inspectorLabel(selection: Selection): string {

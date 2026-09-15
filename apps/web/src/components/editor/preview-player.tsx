@@ -658,11 +658,11 @@ export function PreviewPlayer({
 
   if (timeline.clips.length === 0) {
     return (
-      <div className="mx-auto w-full" style={{ maxWidth }}>
+      <div className="w-full">
         {toolbar}
         <div
-          className="flex w-full items-center justify-center border border-[color:var(--hair-dark)] bg-ink-950 bg-hatch"
-          style={{ aspectRatio: frameAspectCss(format) }}
+          className="mx-auto flex w-full items-center justify-center border border-[color:var(--hair-dark)] bg-ink-950 bg-hatch"
+          style={{ aspectRatio: frameAspectCss(format), maxWidth }}
         >
           <p className="eyebrow-light">No picture yet</p>
         </div>
@@ -672,10 +672,17 @@ export function PreviewPlayer({
 
   const src = activeMedia ? previewSrc(activeMedia) : null;
 
+  /*
+   * The toolbar is the room's chrome, so it spans the whole column; the picture
+   * and its transport keep their own width cap and stay centred under it.
+   */
   return (
-    <div className="mx-auto w-full" style={{ maxWidth }}>
+    <div className="w-full">
       {toolbar}
-      <div className="border border-[color:var(--hair-dark)] bg-ink-950">
+      <div
+        className="mx-auto border border-[color:var(--hair-dark)] bg-ink-950"
+        style={{ maxWidth }}
+      >
       {/* Clipped, because FFmpeg crops a layer at the frame edge and the
           preview has to agree — a tall portrait inset otherwise spills out
           over the transport. */}
