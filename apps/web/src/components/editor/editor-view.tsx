@@ -744,10 +744,10 @@ export function EditorView({
         onClick={() => setSettingsOpen(true)}
         aria-expanded={settingsOpen}
         title="Film settings"
-        className="btn-quiet-dark hidden shrink-0 md:inline-flex"
+        className="btn-outline-dark hidden shrink-0 md:inline-flex"
       >
         <span aria-hidden>⚙</span>
-        <span className="ml-1.5 hidden lg:inline">Film settings</span>
+        <span className="ml-1.5">Shape · Auto-cut · Music</span>
       </button>
       {/* The same trigger sits at the foot of the rough cut on the floor;
           the director's panel locks while the film is on its way. */}
@@ -812,7 +812,7 @@ export function EditorView({
              * picture measured against the *large* viewport overflows the small
              * one the moment the address bar slides back in.
              */
-            heightCap={asSheet ? "40dvh" : "max(180px, min(45vh, 100dvh - 470px))"}
+            heightCap={asSheet ? "40dvh" : "max(180px, min(45vh, 100dvh - 560px))"}
             timeline={timeline}
             format={format}
             mediaById={mediaById}

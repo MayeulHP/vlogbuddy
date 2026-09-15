@@ -141,52 +141,14 @@ export function VlogShell(props: VlogShellProps) {
       <header className="pt-safe px-safe sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-7">
           {/*
-            On the bench the masthead is overhead: the room has its own toolbar,
-            and every pixel of preamble is a pixel of strip. So at md+ it
-            collapses to one row — who we are, which film, which room, who else
-            is here — and the slate line and the display rail stay on the Trip
-            page, where the counts are the point.
-
-            Phones get the same treatment, one branch down: the row below is
-            already title · presence · share, so Film only has to drop the slate
-            line under it. It stays sticky, and the rooms stay in the bottom bar.
+            The same masthead in every room. The bench once collapsed it to a
+            single row to buy strip height, but a rail that moves is a rail
+            you lose — going back to Trip should be the same reach from
+            anywhere.
           */}
-          {fixed && (
-            <div className="hidden min-h-[48px] items-center gap-3 md:flex">
-              <Wordmark size="sm" className="shrink-0" />
-              <span
-                aria-hidden
-                className="h-4 w-px shrink-0 bg-[color:var(--hair-strong)]"
-              />
-              <h1 className="headline min-w-0 flex-1 truncate text-lg leading-none">
-                {vlog.title}
-              </h1>
-              <WorkspaceNav
-                tab={effectiveTab}
-                onTab={setTab}
-                state={state}
-                variant="segment"
-                counts={{
-                  clips: props.timeline.clips.length,
-                  unrated,
-                  hasRender: Boolean(props.latestRender),
-                }}
-              />
-              {state === "export" && (
-                <span className="flex shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-label text-signal-700">
-                  <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-signal-600" />
-                  Rendering — locked
-                </span>
-              )}
-              <PresenceBar presence={presence} connected={connected} selfId={member.id} />
-              <ShareBar shareUrl={shareUrl} />
-            </div>
-          )}
-
           <div
             className={cn(
               "flex flex-wrap items-center justify-between gap-x-6 gap-y-2 pt-2.5 sm:pt-3",
-              fixed && "pb-2.5 md:hidden md:pb-0",
             )}
           >
             <div className="flex min-w-0 flex-1 items-baseline gap-2 sm:gap-3">
@@ -209,7 +171,7 @@ export function VlogShell(props: VlogShellProps) {
           </div>
 
           {/* Slate line — the numbers, in mono, never shouting. */}
-          <div className={cn(fixed && "hidden", "scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0")}>
+          <div className={cn("scrollbar-thin touch-scroll-x -mx-4 mt-1.5 flex items-center gap-x-3 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:gap-y-1 sm:overflow-visible sm:px-0 sm:pb-0")}>
             {[
               `${media.length} clip${media.length === 1 ? "" : "s"}`,
               `${music.length} track${music.length === 1 ? "" : "s"}`,
@@ -224,7 +186,7 @@ export function VlogShell(props: VlogShellProps) {
           </div>
 
           {/* On a phone the same three rooms live in the bottom bar instead. */}
-          <div className={cn("mt-2 hidden md:block", fixed && "md:hidden")}>
+          <div className="mt-2 hidden md:block">
             <WorkspaceNav
               tab={effectiveTab}
               onTab={setTab}

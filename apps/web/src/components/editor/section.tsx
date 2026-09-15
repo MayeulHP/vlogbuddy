@@ -21,7 +21,7 @@ export function Section({
   storageKey,
   title,
   summary,
-  defaultOpen = false,
+  defaultOpen = true,
   children,
 }: {
   /** Stable per-inspector id; the open state is remembered under it. */
