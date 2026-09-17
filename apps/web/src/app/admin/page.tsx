@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getRenderSettings } from "@vlogbuddy/db";
 import { formatBytes } from "@vlogbuddy/shared";
 import { requireAdmin } from "@/lib/admin";
+import { adminLogoutAction } from "@/lib/actions/admin-auth";
 import { listVlogStorage } from "@/lib/admin-queries";
 import { Wordmark } from "@/components/brand";
 import { CreateVlogForm } from "@/components/create-vlog-form";
@@ -13,8 +14,8 @@ export const dynamic = "force-dynamic";
 /**
  * The projection booth: the one page that belongs to whoever runs the box.
  *
- * Basic Auth in middleware keeps guests out; `requireAdmin` here and in every
- * action is what actually protects the data.
+ * The signed admin cookie checked in middleware keeps guests out; `requireAdmin`
+ * here and in every action is what actually protects the data.
  */
 export default async function AdminPage() {
   await requireAdmin();
@@ -34,7 +35,14 @@ export default async function AdminPage() {
             <Wordmark size="sm" />
           </Link>
           <p className="eyebrow-signal">Projection booth · admin</p>
-          <p className="eyebrow hidden sm:block">{rows.length} rolls on this box</p>
+          <div className="flex items-baseline gap-5">
+            <p className="eyebrow hidden sm:block">{rows.length} rolls on this box</p>
+            <form action={adminLogoutAction}>
+              <button type="submit" className="btn-quiet">
+                Sign out
+              </button>
+            </form>
+          </div>
         </div>
       </header>
 

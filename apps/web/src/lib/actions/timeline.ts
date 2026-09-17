@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, db, eq, mediaItems, renderJobs, timelines, vlogs } from "@vlogbuddy/db";
+import { and, db, eq, inArray, mediaItems, renderJobs, timelines, vlogs } from "@vlogbuddy/db";
 import {
   applyTimelineOp,
   emptyTimeline,
@@ -218,10 +218,17 @@ export async function startRenderAction(slug: string) {
       };
     }
 
+    // "queued" counts as in progress: two fast clicks both used to get past a
+    // check that only looked for "rendering", and the queue would run both.
     const [existing] = await db
       .select()
       .from(renderJobs)
-      .where(and(eq(renderJobs.vlogId, session.vlog.id), eq(renderJobs.status, "rendering")))
+      .where(
+        and(
+          eq(renderJobs.vlogId, session.vlog.id),
+          inArray(renderJobs.status, ["queued", "rendering"]),
+        ),
+      )
       .limit(1);
 
     if (existing) return { ok: false as const, error: "A render is already in progress" };
@@ -238,8 +245,19 @@ export async function startRenderAction(slug: string) {
       })
       .returning();
 
+    // The queue is the real arbiter: the check above can still lose a race
+    // between two requests, and `stately` rejects the loser by returning null.
+    // Without this the row would sit "queued" forever against no job at all.
+    const queued = await enqueueRender({ renderJobId: job.id, vlogId: session.vlog.id });
+    if (!queued) {
+      await db
+        .update(renderJobs)
+        .set({ status: "failed", error: "A render is already in progress" })
+        .where(eq(renderJobs.id, job.id));
+      return { ok: false as const, error: "A render is already in progress" };
+    }
+
     await db.update(vlogs).set({ state: "export" }).where(eq(vlogs.id, session.vlog.id));
-    await enqueueRender({ renderJobId: job.id, vlogId: session.vlog.id });
 
     emitToVlog(session.vlog.id, "vlog:state", { state: "export" });
     emitToVlog(session.vlog.id, "render:progress", {

@@ -12,14 +12,23 @@ import {
   type MediaItem,
 } from "@vlogbuddy/db";
 import {
+  DUCK_SIDECHAIN,
+  MOTION_ZOOM,
   XFADE_FOR,
   audioTrackSpan,
+  duckRatio,
   clipDuration,
+  clipSourceSpan,
+  clipSpeed,
+  isGraded,
+  movesFrame,
   overlapsPrevious,
   layerWindow,
   layersInPaintOrder,
   normalizeTimeline,
+  transitionOverlap,
   timelineDuration,
+  type Clip,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
 import { env } from "../env";
@@ -40,7 +49,8 @@ export interface RenderJobPayload {
  * fall over. Photos become timed video segments; videos get trimmed. Then it's
  * either a straight concat (all cuts) or a chain of xfades (anything else).
  * Layers are composited over the result, and every audio track is mixed under
- * it.
+ * it — the music first ducked against the shots' own sound, so a voice doesn't
+ * have to compete with the score.
  */
 export async function renderVlog(job: RenderJobPayload): Promise<void> {
   const { renderJobId } = job;
@@ -111,12 +121,19 @@ export async function renderVlog(job: RenderJobPayload): Promise<void> {
 
       // Plenty of real videos carry no audio track (screen recordings, muted
       // captures, action-cam modes). Referencing [n:a] for those makes the whole
-      // filtergraph fail, so probe rather than assume.
-      if (item.kind === "video") {
+      // filtergraph fail, so this has to be known rather than assumed.
+      //
+      // `process-media` already probed it while the file was on disk, so the
+      // stored answer is used where there is one. Null means the row predates
+      // the column — fall back to probing, because being wrong here fails the
+      // whole render, which is worth far more than the ffprobe it costs.
+      if (item.kind !== "video") {
+        hasAudio.set(mediaId, false);
+      } else if (item.hasAudio !== null) {
+        hasAudio.set(mediaId, item.hasAudio);
+      } else {
         const info = await probe(local).catch(() => null);
         hasAudio.set(mediaId, info?.hasAudio ?? false);
-      } else {
-        hasAudio.set(mediaId, false);
       }
 
       const pct = ((index + 1) / mediaIds.length) * 15;
@@ -268,6 +285,90 @@ function evenPx(value: number): number {
   return Math.max(2, Math.round(value / 2) * 2);
 }
 
+/**
+ * How much bigger than the output the frame is built before `zoompan` crops
+ * it. zoompan steps its crop window by whole *input* pixels, so at 1:1 a slow
+ * move judders once a second or so; at 2:1 each step is half an output pixel
+ * and the move reads as smooth. Higher is smoother still and costs real time
+ * on the machines this is built for — 2 is where it stops being visible.
+ */
+const MOTION_SUPERSAMPLE = 2;
+
+/**
+ * The Ken Burns move, as a `zoompan` call.
+ *
+ * Driven off `on`, the output frame counter, rather than the `time` variable —
+ * `time` only exists in newer FFmpeg builds and this has to work on whatever
+ * the distro shipped. `d=1` because the still has already been looped into a
+ * stream of exactly `frames` frames, so zoompan emits one frame per frame
+ * instead of multiplying them.
+ */
+function motionFilter(
+  clip: Clip,
+  frames: number,
+  width: number,
+  height: number,
+  fps: number,
+): string | null {
+  if (!movesFrame(clip.motion) || frames < 2) return null;
+
+  const travel = (MOTION_ZOOM - 1).toFixed(4);
+  const progress = `on/${frames - 1}`;
+  const zoom =
+    clip.motion === "punchin"
+      ? `1+${travel}*(${progress})`
+      : `${MOTION_ZOOM}-${travel}*(${progress})`;
+
+  return [
+    `zoompan=z='${zoom}'`,
+    // Centred: the crop window is always the middle of the frame, whatever
+    // the zoom, which is what keeps a letterboxed photo symmetrical.
+    `x='iw/2-(iw/zoom/2)'`,
+    `y='ih/2-(ih/zoom/2)'`,
+    `d=1`,
+    `s=${width}x${height}`,
+    `fps=${fps}`,
+  ].join(":");
+}
+
+/**
+ * The grade. Each value is checked against its neutral, so an untouched clip
+ * adds no filters at all and compiles to the same chain it always did.
+ */
+function gradeFilters(clip: Clip): string[] {
+  if (!isGraded(clip)) return [];
+
+  const out: string[] = [];
+  const eq: string[] = [];
+  if (clip.brightness !== 0) eq.push(`brightness=${clip.brightness.toFixed(3)}`);
+  if (clip.contrast !== 1) eq.push(`contrast=${clip.contrast.toFixed(3)}`);
+  if (clip.saturation !== 1) eq.push(`saturation=${clip.saturation.toFixed(3)}`);
+  if (eq.length > 0) out.push(`eq=${eq.join(":")}`);
+  if (clip.hue !== 0) out.push(`hue=h=${clip.hue.toFixed(1)}`);
+  if (clip.blur > 0) out.push(`gblur=sigma=${clip.blur.toFixed(2)}`);
+  return out;
+}
+
+/**
+ * `atempo` only accepts 0.5–2.0, so anything further out is reached by
+ * chaining — 4× is two doublings. Pitch stays where it was, which is the whole
+ * reason for using it rather than resampling.
+ */
+function atempoChain(speed: number): string[] {
+  const steps: string[] = [];
+  let remaining = speed;
+  while (remaining > 2) {
+    steps.push("atempo=2.0");
+    remaining /= 2;
+  }
+  while (remaining < 0.5) {
+    steps.push("atempo=0.5");
+    remaining *= 2;
+  }
+  steps.push(`atempo=${remaining.toFixed(4)}`);
+  return steps;
+}
+
 /** Exported for testing — this graph is the trickiest part of the pipeline. */
 export function buildFilterGraph(opts: GraphOptions) {
   const {
@@ -288,20 +389,26 @@ export function buildFilterGraph(opts: GraphOptions) {
   const videoLabels: string[] = [];
   const audioLabels: string[] = [];
   const clipDurations: number[] = [];
+  /** Per clip, in step with `clipDurations`: is there anything to hear? */
+  const clipAudible: boolean[] = [];
+  /** Per clip: does it push the score down while it plays? */
+  const clipDucks: boolean[] = [];
 
   let inputIndex = 0;
 
-  // Ducking is about whether anything is actually going to play under the
-  // shots, so it has to be settled before the clip chains are built.
   const musicTracks = timeline.audio.filter((t) => !t.muted && audioPaths.has(t.id));
-  const duck = timeline.duckClipAudio && musicTracks.length > 0;
 
   timeline.clips.forEach((clip, i) => {
     const media = mediaById.get(clip.mediaItemId);
     const local = localPaths.get(clip.mediaItemId);
     if (!media || !local) return;
 
+    // What the audience sees, and what FFmpeg has to read to produce it. They
+    // differ only when a clip has been retimed: a 2s shot at double speed
+    // spends 4s of footage.
     const duration = clipDuration(clip, media.durationSeconds);
+    const sourceSpan = clipSourceSpan(clip, media.durationSeconds);
+    const speed = clipSpeed(clip);
     clipDurations.push(duration);
 
     const isPhoto = clip.kind === "photo";
@@ -310,21 +417,35 @@ export function buildFilterGraph(opts: GraphOptions) {
       // Loop the still into a fixed-length segment.
       inputs.push("-loop", "1", "-t", String(duration), "-i", local);
     } else {
-      inputs.push("-ss", String(clip.trimStart), "-t", String(duration), "-i", local);
+      inputs.push("-ss", String(clip.trimStart), "-t", String(sourceSpan), "-i", local);
     }
 
     const idx = inputIndex++;
     const vLabel = `v${i}`;
+
+    const motion = isPhoto
+      ? motionFilter(clip, Math.round(duration * fps), width, height, fps)
+      : null;
+    // A moving still is built oversized and cropped back down to the frame;
+    // everything else is scaled straight into it.
+    const canvas = motion ? MOTION_SUPERSAMPLE : 1;
+    const canvasW = evenPx(width * canvas);
+    const canvasH = evenPx(height * canvas);
 
     // Normalise everything: scale into the frame, pad, fix SAR and fps.
     // The input label attaches directly to the first filter — no comma.
     const videoChain =
       `[${idx}:v]` +
       [
-        `scale=${width}:${height}:force_original_aspect_ratio=decrease`,
-        `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=black`,
+        `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease`,
+        `pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:color=black`,
         `setsar=1`,
+        // Before the move, so zoompan is handed exactly the frames it is going
+        // to emit — its `on` counter is what drives the whole gesture.
         `fps=${fps}`,
+        ...(motion ? [motion] : []),
+        ...(speed === 1 ? [] : [`setpts=PTS/${speed}`]),
+        ...gradeFilters(clip),
         // Pin the timebase explicitly. `concat` hands its output back at
         // 1/1000000 whatever went in, and `xfade` refuses two inputs whose
         // timebases disagree — which is exactly what a cut followed by a
@@ -367,18 +488,24 @@ export function buildFilterGraph(opts: GraphOptions) {
 
     // Audio: photos and muted clips contribute silence of the right length.
     const aLabel = `a${i}`;
-    if (isPhoto || clip.muted || !clipHasAudio(media, hasAudio)) {
+    const audible = !isPhoto && !clip.muted && clipHasAudio(media, hasAudio);
+    if (!audible) {
       filters.push(
         `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration},asetpts=PTS-STARTPTS[${aLabel}]`,
       );
     } else {
-      const volume = duck ? clip.volume * 0.35 : clip.volume;
+      // Full level. The score is what moves out of the way now, not the shot.
       filters.push(
         `[${idx}:a]${AUDIO_FORMAT},` +
-          `atrim=duration=${duration},asetpts=PTS-STARTPTS,volume=${volume.toFixed(2)}[${aLabel}]`,
+          // Retime first, then trim: `duration` is already the retimed length,
+          // and atempo is what turns the source span into it.
+          (speed === 1 ? "" : `${atempoChain(speed).join(",")},`) +
+          `atrim=duration=${duration},asetpts=PTS-STARTPTS,volume=${clip.volume.toFixed(2)}[${aLabel}]`,
       );
     }
     audioLabels.push(aLabel);
+    clipAudible.push(audible);
+    clipDucks.push(clip.duckMusic);
   });
 
   if (videoLabels.length === 0) throw new Error("No usable clips in the timeline");
@@ -389,12 +516,20 @@ export function buildFilterGraph(opts: GraphOptions) {
   let finalAudio: string;
   /** Length of the finished picture, transition overlaps already subtracted. */
   let videoLength: number;
+  /**
+   * Where each clip lands in the finished film. Measured here rather than
+   * through `clipStartTimes` because the sidechain gate has to agree with the
+   * stream it's gating to the frame, and this is the loop that decides where
+   * an overlapped clip actually starts.
+   */
+  const clipStarts: number[] = [];
 
   if (usesTransition && videoLabels.length > 1) {
     // Chain xfades; each one pulls the next clip back by its own duration.
     let currentV = videoLabels[0];
     let currentA = audioLabels[0];
     let offset = clipDurations[0];
+    clipStarts.push(0);
 
     for (let i = 1; i < videoLabels.length; i++) {
       const clip = timeline.clips[i];
@@ -402,13 +537,17 @@ export function buildFilterGraph(opts: GraphOptions) {
       // codebase asks `overlapsPrevious` and never needs to know the spelling.
       const xfadeName = XFADE_FOR[clip.transitionIn];
       const isFade = xfadeName !== null;
-      const fadeDuration = isFade ? Math.min(clip.transitionDuration, clipDurations[i] * 0.9) : 0;
+      // `offset` is the film so far, which is exactly the room a fade has to
+      // reach back into. Shared with the bench and the preview so all three
+      // agree on how long the finished picture runs.
+      const fadeDuration = isFade ? transitionOverlap(clip, clipDurations[i], offset) : 0;
 
       const outV = `xv${i}`;
       const outA = `xa${i}`;
 
       if (isFade && fadeDuration > 0) {
         const transitionStart = Math.max(0, offset - fadeDuration);
+        clipStarts.push(transitionStart);
         filters.push(
           `[${currentV}][${videoLabels[i]}]xfade=transition=${xfadeName}:duration=${fadeDuration}:offset=${transitionStart.toFixed(3)}[${outV}]`,
         );
@@ -417,6 +556,7 @@ export function buildFilterGraph(opts: GraphOptions) {
         );
         offset = offset - fadeDuration + clipDurations[i];
       } else {
+        clipStarts.push(offset);
         // Back to the clip timebase, so the next xfade in the chain — if this
         // run of hard cuts ends at a scene break — can accept this as an input.
         filters.push(`[${currentV}][${videoLabels[i]}]concat=n=2:v=1:a=0,settb=1/${fps}[${outV}]`);
@@ -438,7 +578,10 @@ export function buildFilterGraph(opts: GraphOptions) {
     filters.push(`${aIn}concat=n=${audioLabels.length}:v=0:a=1[outa]`);
     finalVideo = "outv";
     finalAudio = "outa";
-    videoLength = clipDurations.reduce((a, b) => a + b, 0);
+    videoLength = clipDurations.reduce((cursor, d) => {
+      clipStarts.push(cursor);
+      return cursor + d;
+    }, 0);
   }
 
   // --- Picture layers ---------------------------------------------------
@@ -509,6 +652,8 @@ export function buildFilterGraph(opts: GraphOptions) {
 
   // --- The audio stack --------------------------------------------------
   const musicLabels: string[] = [];
+  /** Position in `musicLabels` → how far that track gets out of the way. */
+  const duckDepths = new Map<number, number>();
 
   musicTracks.forEach((track, n) => {
     const file = audioPaths.get(track.id);
@@ -545,8 +690,68 @@ export function buildFilterGraph(opts: GraphOptions) {
 
     const label = `mus${n}`;
     filters.push(`[${idx}:a]${chain}[${label}]`);
+    if (timeline.duckClipAudio && track.duck > 0.001) duckDepths.set(musicLabels.length, track.duck);
     musicLabels.push(label);
   });
+
+  // --- The duck ---------------------------------------------------------
+  // The score is compressed against the shots' own sound, so it drops while
+  // somebody is talking and comes back up in the gaps. The key is the finished
+  // base track — everything the audience hears from the picture, already cut
+  // and crossfaded — which is the only stream whose clock matches the music's.
+  //
+  // Nothing is emitted unless there's actually a voice to duck under: no
+  // audible shot, or every audible shot opted out, and the graph is exactly the
+  // one it was before any of this existed.
+  const opensTheDuck = clipAudible.some((audible, i) => audible && clipDucks[i]);
+  const duckTargets = [...duckDepths.entries()];
+
+  if (duckTargets.length > 0 && opensTheDuck) {
+    filters.push(`[${finalAudio}]asplit=2[dckdry][dckraw]`);
+    finalAudio = "dckdry";
+
+    // Shots that opted out are cut out of the *key*, not the mix: their sound
+    // still plays, it just doesn't lean on the music.
+    const held = clipAudible
+      .map((audible, i) => (audible && !clipDucks[i] ? i : -1))
+      .filter((i) => i >= 0);
+
+    let key = "dckraw";
+    if (held.length > 0) {
+      const windows = held
+        .map((i) => {
+          const from = clipStarts[i];
+          const to = from + clipDurations[i];
+          return `between(t,${from.toFixed(3)},${to.toFixed(3)})`;
+        })
+        .join("+");
+      filters.push(`[${key}]volume=0:enable='${windows}'[dckkey]`);
+      key = "dckkey";
+    }
+
+    // One copy of the key per track being ducked; a single track takes it whole.
+    const keys =
+      duckTargets.length === 1 ? [key] : duckTargets.map((_, n) => `dckk${n}`);
+    if (duckTargets.length > 1) {
+      filters.push(`[${key}]asplit=${keys.length}${keys.map((l) => `[${l}]`).join("")}`);
+    }
+
+    duckTargets.forEach(([position, depth], n) => {
+      const out = `dckm${n}`;
+      filters.push(
+        `[${musicLabels[position]}][${keys[n]}]` +
+          `sidechaincompress=threshold=${DUCK_SIDECHAIN.threshold}` +
+          `:ratio=${duckRatio(depth)}` +
+          `:attack=${DUCK_SIDECHAIN.attack}` +
+          `:release=${DUCK_SIDECHAIN.release}` +
+          // Explicit rather than defaulted: `makeup` handing back the gain it
+          // just took would undo the whole point, and builds have disagreed
+          // about what it defaults to.
+          `:makeup=1:level_sc=1[${out}]`,
+      );
+      musicLabels[position] = out;
+    });
+  }
 
   const mixInputs = [finalAudio, ...musicLabels, ...layerAudioLabels];
   let audioLabel: string;

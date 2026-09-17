@@ -6,8 +6,16 @@ import path from "node:path";
 import { db, eq, mediaItems } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, downloadToFile, uploadFile } from "../storage";
-import { generateProxy, generateThumbnail, probe } from "../ffmpeg";
+import {
+  generatePhotoProxy,
+  generateProxy,
+  generateThumbnail,
+  probe,
+  PHOTO_PROXY_MAX_EDGE,
+  type ProbeResult,
+} from "../ffmpeg";
 import { analyzeBeats } from "../beats";
+import { readPhotoExif } from "../exif";
 import { notifyMediaUpdated } from "../notify";
 
 export interface ProcessMediaJob {
@@ -17,8 +25,10 @@ export interface ProcessMediaJob {
 
 /**
  * Post-upload pipeline: probe metadata, make a thumbnail for the dump view and
- * (for video) a low-res proxy for smooth editing. Capture time from the file
- * beats whatever the browser guessed, so chronological ordering is accurate.
+ * a proxy for smooth editing — a low-res MP4 for video, a JPEG for a photo the
+ * browser can't paint or can't afford. It also settles when and where the file
+ * was taken, out of its own EXIF or container tags, because the browser's guess
+ * at a capture time is what the auto-cut would otherwise build scenes from.
  */
 export async function processMedia(job: ProcessMediaJob): Promise<void> {
   const { mediaItemId } = job;
@@ -40,6 +50,7 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
     await downloadToFile(item.storageKey, localOriginal);
 
     const isVideo = item.kind === "video";
+    const isPhoto = item.kind === "photo";
     const isAudio = item.contentType.startsWith("audio/");
 
     const info = await probe(localOriginal).catch((err) => {
@@ -47,8 +58,14 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
       return null;
     });
 
+    // ffprobe reads container tags and a photo keeps everything in its EXIF,
+    // so a still needs a second opinion to say when and where it was taken.
+    const exif = isPhoto ? await readPhotoExif(localOriginal) : null;
+
     let thumbnailKey: string | null = null;
     let proxyKey: string | null = null;
+    let width = info?.width ?? null;
+    let height = info?.height ?? null;
 
     // An uploaded track is as likely to end up the music bed as a YouTube
     // link, so it gets the same beat analysis. Best-effort: a file we can't
@@ -79,8 +96,64 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
       }
     }
 
-    // Prefer the real capture time from the file over the client's guess.
-    const capturedAt = info?.capturedAt ?? item.capturedAt ?? null;
+    if (isPhoto && needsDisplayProxy(item.contentType, info)) {
+      const proxyPath = path.join(workDir, "proxy.jpg");
+      try {
+        await generatePhotoProxy(localOriginal, proxyPath);
+        proxyKey = buildStorageKey(item.vlogId, "proxy", item.id, "proxy.jpg");
+        await uploadFile(proxyKey, proxyPath, "image/jpeg");
+
+        /**
+         * A tiled HEIC probes as a single 512px tile, not as the photograph,
+         * because each tile is its own stream. The proxy is a flattened decode,
+         * so whenever it comes out bigger than the probe claimed, it is the one
+         * telling the truth about the frame.
+         */
+        const proxyInfo = await probe(proxyPath).catch(() => null);
+        if (proxyInfo?.width && proxyInfo.width > (width ?? 0)) {
+          width = proxyInfo.width;
+          height = proxyInfo.height;
+        }
+      } catch (err) {
+        // Non-fatal, like every other derivative here: the photo is still in
+        // the pile and still counts, it just won't preview outside Safari.
+        const hint = isAppleStill(item.contentType)
+          ? " (this FFmpeg build may be too old to read HEIC — 7.0 or newer decodes it)"
+          : "";
+        console.warn(
+          `[process-media] photo proxy failed for ${item.id}${hint}:`,
+          (err as Error).message,
+        );
+      }
+    }
+
+    /**
+     * Capture time, ranked by how close the source sat to the shutter.
+     *
+     * Immich is the exception that outranks us: it has already read this
+     * asset's EXIF, and it resolves the timezone a naive EXIF date is missing
+     * from the asset's own location and the owner's settings. Re-deriving it
+     * here would shift an imported photo by the worker's offset for no gain.
+     * Otherwise the file's EXIF beats the container, which beats the browser's
+     * `File.lastModified` — often no more than when the file was copied.
+     */
+    const immichDated = item.immichAssetId !== null && item.capturedAt !== null;
+    const capturedAt = immichDated
+      ? item.capturedAt
+      : exif?.capturedAt ?? info?.capturedAt ?? item.capturedAt ?? null;
+
+    // Same order of trust, and a failed read never erases what's on the row.
+    const latitude = exif?.latitude ?? info?.latitude ?? item.latitude ?? null;
+    const longitude = exif?.longitude ?? info?.longitude ?? item.longitude ?? null;
+
+    /**
+     * Photographs are silent by definition; everything else is whatever the
+     * probe found. A probe that failed leaves this unknown rather than
+     * claiming silence — the render has to reference `[n:a]` for a clip that
+     * has sound and must not for one that hasn't, and guessing wrong either
+     * loses the audio or fails the whole filter graph.
+     */
+    const hasAudio = isPhoto ? false : info?.hasAudio ?? item.hasAudio ?? null;
 
     /**
      * Content hash, in the same shape Immich uses. Computing it here — while
@@ -95,10 +168,13 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         status: "ready",
         thumbnailKey,
         proxyKey,
-        width: info?.width ?? null,
-        height: info?.height ?? null,
+        width,
+        height,
         durationSeconds: info?.durationSeconds ?? null,
         capturedAt,
+        latitude,
+        longitude,
+        hasAudio,
         checksumSha1,
         bpm: beats?.bpm ?? null,
         beatOffsetSeconds: beats?.beatOffsetSeconds ?? null,
@@ -114,8 +190,8 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
       thumbnailKey,
       proxyKey,
       durationSeconds: info?.durationSeconds ?? null,
-      width: info?.width ?? null,
-      height: info?.height ?? null,
+      width,
+      height,
       capturedAt: capturedAt ? capturedAt.toISOString() : null,
     });
 
@@ -145,6 +221,38 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * Formats every browser can paint. Anything outside this set — HEIC and HEIF
+ * from an iPhone, DNG from a camera roll that came in through Immich — is a
+ * file the pile can hold but nobody can see, so it has to be handed over as
+ * a JPEG instead.
+ */
+const BROWSER_SAFE_IMAGE_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+]);
+
+function isAppleStill(contentType: string): boolean {
+  return contentType === "image/heic" || contentType === "image/heif";
+}
+
+/**
+ * Whether this photo needs a JPEG standing in for it.
+ *
+ * Two different reasons, deliberately kept to one decision. A format no browser
+ * reads always needs one. A format they do read only needs one when it's
+ * enormous: re-encoding an ordinary snap costs CPU and storage on a machine
+ * that likely has little of either and buys nothing, but a 48MP original is a
+ * picture the editor downloads in full to show at a fraction of the size.
+ */
+function needsDisplayProxy(contentType: string, info: ProbeResult | null): boolean {
+  if (!BROWSER_SAFE_IMAGE_TYPES.has(contentType)) return true;
+  return Math.max(info?.width ?? 0, info?.height ?? 0) > PHOTO_PROXY_MAX_EDGE;
 }
 
 function hashFile(filePath: string): Promise<string> {

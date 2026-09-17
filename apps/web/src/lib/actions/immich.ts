@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, db, desc, eq, immichConnections, immichTransfers } from "@vlogbuddy/db";
+import { and, db, desc, eq, inArray, immichConnections, immichTransfers } from "@vlogbuddy/db";
 import {
   ImmichError,
   connectImmichSchema,
@@ -192,15 +192,38 @@ async function existingChecksums(vlogId: string): Promise<Set<string>> {
 
 // --- transfers --------------------------------------------------------------
 
+/**
+ * Retires a transfer row whose job the queue turned away.
+ *
+ * `assertNoTransferRunning` can still lose a race between two presses; the
+ * queue is what finally decides, and it says so by returning null from `send`.
+ * The row is already inserted by then, so it has to be marked rather than left
+ * waiting on a job that will never exist.
+ */
+async function rejectTransfer(transferId: string, direction: "import" | "export") {
+  const error =
+    direction === "import"
+      ? "You're already importing something — let that finish first"
+      : "You're already sending something over — let that finish first";
+  await db
+    .update(immichTransfers)
+    .set({ status: "failed", message: error, finishedAt: new Date() })
+    .where(eq(immichTransfers.id, transferId));
+  return { ok: false as const, error };
+}
+
 /** Only one copy at a time per person, in either direction. */
 async function assertNoTransferRunning(memberId: string) {
+  // "queued" counts: the queue allows one running and one waiting per member,
+  // so a second press while one is still waiting would be rejected there and
+  // leave a transfer row showing a progress bar that never moves.
   const [running] = await db
     .select()
     .from(immichTransfers)
     .where(
       and(
         eq(immichTransfers.memberId, memberId),
-        eq(immichTransfers.status, "running"),
+        inArray(immichTransfers.status, ["queued", "running"]),
       ),
     )
     .limit(1);
@@ -245,7 +268,7 @@ export async function startImmichImportAction(
       })
       .returning();
 
-    await enqueueImmichImport({
+    const queued = await enqueueImmichImport({
       transferId: transfer.id,
       vlogId: session.vlog.id,
       memberId: session.member.id,
@@ -253,6 +276,7 @@ export async function startImmichImportAction(
       albumName: label,
       assetIds: parsed.data.assetIds,
     });
+    if (!queued) return await rejectTransfer(transfer.id, "import");
 
     revalidatePath(`/v/${slug}`);
     return { ok: true as const, transferId: transfer.id };
@@ -262,11 +286,14 @@ export async function startImmichImportAction(
 }
 
 /**
- * Pushes every original in this vlog into the caller's own Immich.
+ * Pushes every original in this vlog, plus the finished film, into the caller's
+ * own Immich.
  *
  * This is the bit Immich can't do for you: two friends with two servers have no
  * way to merge libraries, so whoever brought the photos, everyone ends up with
- * the full set.
+ * the full set — and with the film itself, which is the part they'll actually
+ * go looking for later. The worker picks the latest finished render; if nothing
+ * has been rendered yet the copy just carries the media and says so.
  */
 export async function startImmichExportAction(slug: string) {
   try {
@@ -288,12 +315,13 @@ export async function startImmichExportAction(slug: string) {
       })
       .returning();
 
-    await enqueueImmichExport({
+    const queued = await enqueueImmichExport({
       transferId: transfer.id,
       vlogId: session.vlog.id,
       memberId: session.member.id,
       albumName: label,
     });
+    if (!queued) return await rejectTransfer(transfer.id, "export");
 
     revalidatePath(`/v/${slug}`);
     return { ok: true as const, transferId: transfer.id };

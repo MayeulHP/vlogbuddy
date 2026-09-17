@@ -330,7 +330,9 @@ function Card({
   overlay?: React.ReactNode;
   onToggleSound?: () => void;
 } & React.HTMLAttributes<HTMLDivElement>) {
-  const src = item.kind === "video" ? item.proxyUrl ?? item.originalUrl : item.originalUrl;
+  // Photos have a proxy as well as videos: an iPhone's HEIC is invisible
+  // anywhere but Safari without one.
+  const src = item.proxyUrl ?? item.originalUrl;
   const others = item.reactions.count - (item.reactions.mine === null ? 0 : 1);
 
   return (

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, openAsBlob } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
-import { and, db, eq, mediaItems, vlogs } from "@vlogbuddy/db";
+import { and, db, desc, eq, isNotNull, mediaItems, renderJobs, vlogs } from "@vlogbuddy/db";
 import {
   addAssetsToAlbum,
   bulkUploadCheck,
@@ -10,7 +10,7 @@ import {
   uploadAsset,
   type ImmichCredentials,
 } from "@vlogbuddy/shared";
-import type { MediaItem } from "@vlogbuddy/db";
+import type { MediaItem, RenderJob } from "@vlogbuddy/db";
 import { env } from "../env";
 import { downloadToFile } from "../storage";
 import { credentialsForMember, reportTransfer } from "../immich-connection";
@@ -23,12 +23,15 @@ export interface ImmichExportJob {
 }
 
 /**
- * Copies the whole pile into one person's Immich, as an album.
+ * Copies the whole pile — and the finished film — into one person's Immich,
+ * as an album.
  *
  * This is the half Immich itself doesn't do: two people with their own servers
  * have no way to merge libraries. Here, whoever brought the photos, everyone
  * who's connected can pull the complete set of originals down into their own
- * instance — so the vlog isn't the only surviving copy of the trip.
+ * instance — so the vlog isn't the only surviving copy of the trip. The film
+ * goes last, because it's the thing people came for and the originals are the
+ * raw material behind it.
  *
  * Safe to run twice. Immich is asked up front which files it already has (by
  * content hash), so a second run uploads only what arrived since, and the
@@ -53,7 +56,9 @@ export async function immichExport(job: ImmichExportJob): Promise<void> {
       .from(mediaItems)
       .where(and(eq(mediaItems.vlogId, vlogId), eq(mediaItems.status, "ready")));
 
-    if (items.length === 0) {
+    const film = await latestFinishedRender(vlogId);
+
+    if (items.length === 0 && !film) {
       await reportTransfer(transferId, {
         status: "done",
         finishedAt: new Date(),
@@ -82,17 +87,19 @@ export async function immichExport(job: ImmichExportJob): Promise<void> {
     /** Assets their server already had — still ours to put in the album. */
     const knownAssetIds = new Set(check.existing.values());
 
-    await reportTransfer(transferId, {
-      total: toUpload.length,
-      skipped: items.length - toUpload.length,
-      message:
-        toUpload.length === 0
-          ? "You already have all of it — just filing it into an album"
-          : `Uploading ${toUpload.length} of ${items.length}…`,
-    });
+    // The film counts towards the bar like anything else, so the numbers people
+    // watch tick up match what actually gets moved.
+    const attempts = toUpload.length + (film ? 1 : 0);
 
     let done = 0;
     let failed = 0;
+    let skipped = items.length - toUpload.length;
+
+    await reportTransfer(transferId, {
+      total: attempts,
+      skipped,
+      message: startMessage(toUpload.length, items.length, film !== null),
+    });
 
     for (const item of toUpload) {
       try {
@@ -114,6 +121,33 @@ export async function immichExport(job: ImmichExportJob): Promise<void> {
       });
     }
 
+    /** A clause for the summary, so people can tell what happened to the film. */
+    let filmNote = "nothing rendered yet, so no film";
+
+    if (film) {
+      await reportTransfer(transferId, { message: "Copying the finished film over…" });
+      try {
+        const result = await exportFilm(film, creds, workDir, {
+          filename: filmFilename(albumName),
+          capturedAt: filmCapturedAt(items, film),
+        });
+        if (result.assetId) knownAssetIds.add(result.assetId);
+        if (result.alreadyThere) {
+          skipped++;
+          filmNote = "the film was already there";
+        } else {
+          done++;
+          filmNote = "including the finished film";
+        }
+      } catch (err) {
+        failed++;
+        filmNote = "the film didn't make it";
+        console.error(`[immich-export] film ${film.id} failed:`, (err as Error).message);
+      }
+
+      await reportTransfer(transferId, { done, skipped, failed });
+    }
+
     // The album is the point — it's what makes this a copy of *the vlog*
     // rather than a pile of loose photos in their timeline.
     let remoteAlbumId: string | null = null;
@@ -132,12 +166,14 @@ export async function immichExport(job: ImmichExportJob): Promise<void> {
       }
     }
 
+    const allFailed = attempts > 0 && failed === attempts;
+
     await reportTransfer(transferId, {
-      status: failed === toUpload.length && toUpload.length > 0 ? "failed" : "done",
+      status: allFailed ? "failed" : "done",
       finishedAt: new Date(),
       remoteAlbumId,
-      message: summarise(done, items.length - toUpload.length, failed, remoteAlbumId !== null),
-      error: failed === toUpload.length && toUpload.length > 0 ? "Every upload failed" : null,
+      message: summarise(done, skipped, failed, remoteAlbumId !== null, filmNote),
+      error: allFailed ? "Every upload failed" : null,
     });
 
     console.log(`[immich-export] ${transferId}: ${done} uploaded, ${failed} failed`);
@@ -189,6 +225,99 @@ async function exportOne(
   }
 }
 
+/**
+ * Pushes the rendered MP4 itself.
+ *
+ * Renders carry no stored checksum — the file is written once and never read
+ * back — so the hash comes from the copy we had to pull down anyway, which
+ * still lets us ask before spending the upload. Re-rendering makes a new file
+ * with a new hash, so pressing the button after a re-cut sends the new film and
+ * leaves the old one alone.
+ */
+async function exportFilm(
+  film: RenderJob,
+  creds: ImmichCredentials,
+  workDir: string,
+  as: { filename: string; capturedAt: Date },
+): Promise<{ assetId: string | null; alreadyThere: boolean }> {
+  const local = path.join(workDir, `film-${film.id}.mp4`);
+  await downloadToFile(film.outputKey as string, local);
+
+  try {
+    const checksum = await hashFile(local);
+    const existing = (await bulkUploadCheck(creds, [checksum])).existing.get(checksum);
+    if (existing) return { assetId: existing, alreadyThere: true };
+
+    const data = await openAsBlob(local, { type: "video/mp4" });
+    const result = await uploadAsset(creds, {
+      data,
+      filename: as.filename,
+      fileCreatedAt: as.capturedAt,
+      durationMs: film.durationSeconds != null ? film.durationSeconds * 1000 : null,
+    });
+
+    return { assetId: result.id, alreadyThere: result.status === "duplicate" };
+  } finally {
+    await rm(local, { force: true }).catch(() => {});
+  }
+}
+
+/** The newest render that actually produced a file. */
+async function latestFinishedRender(vlogId: string): Promise<RenderJob | null> {
+  const [row] = await db
+    .select()
+    .from(renderJobs)
+    .where(
+      and(
+        eq(renderJobs.vlogId, vlogId),
+        eq(renderJobs.status, "done"),
+        isNotNull(renderJobs.outputKey),
+      ),
+    )
+    // By submission time, not finish time: renders are serialised one per vlog,
+    // and `finished_at` can be null on rows written before it was recorded —
+    // which Postgres sorts *first* under DESC.
+    .orderBy(desc(renderJobs.createdAt))
+    .limit(1);
+
+  return row ?? null;
+}
+
+/**
+ * The film lands in their timeline at the last moment it contains, not on the
+ * day the render happened — so it sits at the end of the trip it's made of
+ * rather than months later among unrelated photos.
+ */
+function filmCapturedAt(items: MediaItem[], film: RenderJob): Date {
+  let latest: Date | null = null;
+  for (const item of items) {
+    if (item.capturedAt && (!latest || item.capturedAt > latest)) latest = item.capturedAt;
+  }
+  return latest ?? film.finishedAt ?? film.createdAt;
+}
+
+/** A name that reads properly in a photo library, not a storage key. */
+function filmFilename(title: string): string {
+  const safe = title
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return `${safe || "VlogBuddy"}.mp4`;
+}
+
+function startMessage(toUpload: number, inPile: number, withFilm: boolean): string {
+  if (inPile === 0) return "Copying the finished film over…";
+  if (toUpload === 0) {
+    return withFilm
+      ? "You already have the photos — just the film to go"
+      : "You already have all of it — just filing it into an album";
+  }
+  return withFilm
+    ? `Uploading ${toUpload} of ${inPile}, then the film…`
+    : `Uploading ${toUpload} of ${inPile}…`;
+}
+
 function hashFile(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash("sha1");
@@ -205,12 +334,19 @@ export async function albumNameForVlog(vlogId: string): Promise<string> {
   return vlog?.title?.trim() || "VlogBuddy import";
 }
 
-function summarise(done: number, skipped: number, failed: number, filed: boolean): string {
+function summarise(
+  done: number,
+  skipped: number,
+  failed: number,
+  filed: boolean,
+  filmNote: string,
+): string {
   const parts: string[] = [];
   if (done > 0) parts.push(`${done} added to your Immich`);
   if (skipped > 0) parts.push(`${skipped} you already had`);
   if (failed > 0) parts.push(`${failed} failed`);
   if (parts.length === 0) parts.push("Nothing to copy");
+  parts.push(filmNote);
   if (filed) parts.push("filed into an album");
   return parts.join(" · ");
 }

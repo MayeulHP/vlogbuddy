@@ -33,6 +33,7 @@ import {
   reconcileClips,
   runDirector,
   timelineDocSchema,
+  timelineDuration,
   type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
@@ -88,9 +89,18 @@ function clip(over: Partial<Clip> & Pick<Clip, "id" | "mediaItemId">): Clip {
     duration: 3,
     transitionIn: "cut",
     transitionDuration: 0.5,
+    motion: "none",
+    speed: 1,
+    brightness: 0,
+    contrast: 1,
+    saturation: 1,
+    hue: 0,
+    blur: 0,
     volume: 1,
     muted: false,
+    duckMusic: true,
     titles: [],
+    sceneId: null,
     auto: [],
     ...over,
   };
@@ -138,6 +148,34 @@ function meanByteDelta(a: Buffer, b: Buffer): number {
   return sum / length;
 }
 
+/**
+ * Mean level of the music band over one window of a finished render, in dB.
+ *
+ * The fixtures are what make this possible: the score is a 220 Hz tone and
+ * every shot's own sound is 440 Hz, so a steep lowpass leaves the score and
+ * little else. Measuring is the only honest proof that a duck happened — the
+ * picture is identical either way, so frame comparison says nothing.
+ */
+async function musicLevel(file: string, start: number, duration: number): Promise<number | null> {
+  const stderr = await new Promise<string>((resolve) => {
+    const child = spawn(
+      "ffmpeg",
+      ["-hide_banner", "-nostdin", "-ss", String(start), "-t", String(duration), "-i", file,
+       // Four biquads at 300 Hz: 30 dB down on the 440 Hz shot tone, 4 dB off
+       // the music. What comes out is the score and not much else.
+       "-af", "lowpass=f=300,lowpass=f=300,lowpass=f=300,lowpass=f=300,volumedetect",
+       "-f", "null", "-"],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let out = "";
+    child.stderr.on("data", (d) => (out += d.toString()));
+    child.on("close", () => resolve(out));
+    child.on("error", () => resolve(""));
+  });
+  const match = stderr.match(/mean_volume:\s*(-?[\d.]+) dB/);
+  return match ? Number(match[1]) : null;
+}
+
 async function runCase(
   name: string,
   timeline: TimelineDoc,
@@ -148,6 +186,12 @@ async function runCase(
   expectTextAt?: number,
   /** When set, assert that a layer actually changes the frame at this timestamp. */
   expectLayerAt?: number,
+  /**
+   * When set, assert the picture actually *moves* between these two moments of
+   * one still. A photo that isn't moving re-encodes to near-identical frames,
+   * so a zoompan that silently did nothing shows up as a delta of ~0.
+   */
+  expectMovementBetween?: [number, number],
 ) {
   const mediaById = new Map(mediaList.map((m) => [m.id, m]));
   const localPaths = new Map(Object.entries(files).map(([id, f]) => [id, path.join(DIR, f)]));
@@ -295,6 +339,20 @@ async function runCase(
         notes += problem;
       } else {
         notes += "  layer composited ✓";
+      }
+    }
+
+    if (expectMovementBetween !== undefined) {
+      const [t1, t2] = expectMovementBetween;
+      const [f1, f2] = await Promise.all([frameBytes(outFile, t1), frameBytes(outFile, t2)]);
+      if (!f1 || !f2) {
+        drewOk = false;
+        notes += "  ⚠ COULD NOT COMPARE FRAMES";
+      } else if (meanByteDelta(f1, f2) < 1) {
+        drewOk = false;
+        notes += "  ⚠ STILL DIDN'T MOVE";
+      } else {
+        notes += "  still moving ✓";
       }
     }
 
@@ -580,12 +638,15 @@ async function main() {
   // sub-2s clip muted by the director — so it has to build for real rather
   // than only in the unit sense.
   const T0 = Date.UTC(2026, 5, 13, 9, 30);
+  // No coordinates on any of them: the scene break this case wants is the one
+  // the five-hour gap gives, and a fix would only be a second way to get it.
+  const nowhere = { latitude: null, longitude: null };
   const autoCut: CutEntry[] = [
-    { mediaItemId: ID.p1, kind: "photo", durationSeconds: null, capturedAt: T0, rank: 0 },
-    { mediaItemId: ID.v1, kind: "video", durationSeconds: 6, capturedAt: T0 + 60_000, rank: 3.5 },
-    { mediaItemId: ID.p2, kind: "photo", durationSeconds: null, capturedAt: T0 + 120_000, rank: 0 },
+    { mediaItemId: ID.p1, kind: "photo", durationSeconds: null, capturedAt: T0, ...nowhere, rank: 0 },
+    { mediaItemId: ID.v1, kind: "video", durationSeconds: 6, capturedAt: T0 + 60_000, ...nowhere, rank: 3.5 },
+    { mediaItemId: ID.p2, kind: "photo", durationSeconds: null, capturedAt: T0 + 120_000, ...nowhere, rank: 0 },
     // Hours later: a new scene, so the director dissolves into it.
-    { mediaItemId: ID.v2, kind: "video", durationSeconds: 5, capturedAt: T0 + 5 * 3600_000, rank: 0 },
+    { mediaItemId: ID.v2, kind: "video", durationSeconds: 5, capturedAt: T0 + 5 * 3600_000, ...nowhere, rank: 0 },
   ];
   const directed = runDirector(reconcileClips(emptyTimeline(), autoCut), {
     cut: autoCut,
@@ -593,6 +654,184 @@ async function main() {
     settings: { enabled: true, pace: "snappy", sceneText: true, beatSnap: false },
   });
   await runCase("director-output", directed, [m.p1, m.v1, m.p2, m.v2], files, null);
+
+  // 20. The Ken Burns move. Both directions, held well past the four seconds a
+  // static frame gets, and the frames are compared to prove the still is
+  // actually travelling rather than the filter being silently dropped.
+  await runCase(
+    "ken-burns",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 5, motion: "punchin" }),
+        clip({ id: "b", mediaItemId: ID.p2, duration: 5, motion: "pullout" }),
+      ],
+    }),
+    [m.p1, m.p2], files, null,
+    undefined, undefined, [0.3, 4.5],
+  );
+
+  // 21. A moving still dissolving into footage. zoompan re-times its output,
+  // so this is the case that catches it handing xfade a stream whose timebase
+  // no longer matches — the same class of failure as `cut-then-dissolve`.
+  await runCase(
+    "ken-burns-dissolve",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 3, motion: "punchin" }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0.5, trimEnd: 3,
+               transitionIn: "crossfade", transitionDuration: 0.6 }),
+        clip({ id: "c", mediaItemId: ID.p2, duration: 4, motion: "pullout", transitionIn: "cut" }),
+      ],
+    }),
+    [m.p1, m.v1, m.p2], files, null,
+  );
+
+  // 22. Speed, including the two that need `atempo` chained (4× is two
+  // doublings, 0.25× two halvings) and one shot with sound to prove the
+  // retimed audio still lines up with the retimed picture.
+  const speedDoc = doc({
+    clips: [
+      clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4, speed: 2 }),
+      clip({ id: "b", mediaItemId: ID.v2, kind: "video", trimStart: 0, trimEnd: 2, speed: 0.5 }),
+      clip({ id: "c", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4, speed: 4 }),
+      clip({ id: "d", mediaItemId: ID.vs, kind: "video", trimStart: 0, trimEnd: 1, speed: 0.25 }),
+    ],
+  });
+  const ran = await runCase("speed-ramp", speedDoc, [m.v1, m.v2, m.vs], files, null);
+  const predicted = timelineDuration(speedDoc, { [ID.v1]: 6, [ID.v2]: 5, [ID.vs]: 4 });
+  if (Math.abs(ran - predicted) > 0.35) {
+    console.log(`  ⚠ speed-ramp ran ${ran.toFixed(2)}s where the timeline says ${predicted.toFixed(2)}s`);
+    failures++;
+  } else {
+    console.log(`  speed-ramp length matches the timing model ✓ (${predicted.toFixed(2)}s)`);
+  }
+
+  // 23. The grade, everything at once, on both a still and footage.
+  await runCase(
+    "graded",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p1, duration: 2, brightness: 0.15, contrast: 1.4, saturation: 1.6 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 2, hue: 40, blur: 3 }),
+      ],
+    }),
+    [m.p1, m.v1], files, null,
+  );
+
+  // 24. Everything on one clip: a graded still, moving, cut against a graded
+  // and retimed shot. Filters compose in one chain, and this is the order they
+  // compose in.
+  await runCase(
+    "move-grade-speed",
+    doc({
+      clips: [
+        clip({ id: "a", mediaItemId: ID.p2, duration: 4, motion: "punchin", saturation: 0.2, contrast: 1.3 }),
+        clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4, speed: 2,
+               brightness: -0.1, blur: 1.5, transitionIn: "crossfade", transitionDuration: 0.5 }),
+      ],
+    }),
+    [m.p2, m.v1], files, null,
+  );
+
+  // 25. The duck. The score is compressed against the shots' own sound, so it
+  // has to drop under the first shot and hold its level under the second,
+  // which opted out.
+  //
+  // The levels are picked for the fixtures, not for taste: lavfi's `sine` is
+  // quiet enough (-21 dBFS) that at ordinary levels the key barely crosses the
+  // threshold and nothing measurable happens — while the mix still has to stay
+  // clear of the limiter, whose gain reduction would mask what's under test.
+  const duckClips = [
+    clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 3, volume: 2 }),
+    clip({ id: "b", mediaItemId: ID.v1, kind: "video", trimStart: 3, trimEnd: 6, volume: 2,
+           duckMusic: false }),
+  ];
+  const bed = { volume: 1.5, fadeIn: 0, fadeOut: 0 };
+  await runCase(
+    "bed-ducked",
+    doc({ clips: duckClips, audio: [track({ ...bed, duck: 0.9 })] }),
+    [m.v1], files, "music.m4a",
+  );
+  await runCase(
+    "bed-duck-off",
+    doc({ clips: duckClips, audio: [track({ ...bed, duck: 0 })] }),
+    [m.v1], files, "music.m4a",
+  );
+
+  // Well inside each shot: the attack is 20ms and the release 350ms, so both
+  // windows are measured long after the compressor has settled either way.
+  const under = await Promise.all([
+    musicLevel(path.join(OUT, "bed-ducked.mp4"), 0.8, 1.7),
+    musicLevel(path.join(OUT, "bed-duck-off.mp4"), 0.8, 1.7),
+    musicLevel(path.join(OUT, "bed-ducked.mp4"), 3.8, 1.7),
+    musicLevel(path.join(OUT, "bed-duck-off.mp4"), 3.8, 1.7),
+  ]);
+  const [duckedA, dryA, duckedB, dryB] = under;
+
+  if (under.some((level) => level === null)) {
+    console.log("  ⚠ COULD NOT MEASURE THE MIX");
+    failures++;
+  } else {
+    if (dryA! - duckedA! < 3) {
+      console.log(
+        `  ⚠ SCORE DIDN'T DUCK (${duckedA!.toFixed(1)} dB against ${dryA!.toFixed(1)} dB dry)`,
+      );
+      failures++;
+    } else {
+      console.log(`  score ducks under a shot ✓ (-${(dryA! - duckedA!).toFixed(1)} dB)`);
+    }
+
+    if (Math.abs(dryB! - duckedB!) > 1.5) {
+      console.log(
+        `  ⚠ OPT-OUT IGNORED (${duckedB!.toFixed(1)} dB against ${dryB!.toFixed(1)} dB dry)`,
+      );
+      failures++;
+    } else {
+      console.log("  the shot that opted out left it alone ✓");
+    }
+  }
+
+  // 26. Two tracks ducking at once: the key has to be split as many ways as
+  // there are tracks leaning on it, and a stream read twice without an asplit
+  // is the classic way a filter graph fails to build at all.
+  await runCase(
+    "two-tracks-ducked",
+    doc({
+      clips: [clip({ id: "a", mediaItemId: ID.v1, kind: "video", trimStart: 0, trimEnd: 4 })],
+      audio: [
+        track({ volume: 0.6, fadeIn: 0.5, fadeOut: 1 }),
+        track({ role: "extra", startAt: 1, duration: 2, volume: 0.5, fadeIn: 0.3, fadeOut: 0.3 }),
+      ],
+    }),
+    [m.v1], files, "music.m4a",
+  );
+
+  // 27. A shot briefer than the dissolve into it. `xfade` cannot fade for
+  // longer than its inputs last, so the fade gets capped at
+  // `TRANSITION_MAX_SHARE` of the incoming clip — and the bench has to cap it
+  // identically or the film runs longer than the timeline says it does. The
+  // renderer and `timelineDuration` used to clamp separately and disagreed by
+  // the difference, which is what this measures.
+  const briefDoc = doc({
+    clips: [
+      clip({ id: "a", mediaItemId: ID.p1, duration: 2 }),
+      // Asks for a 1.5s dissolve into a 0.6s shot: it can only have 0.54s.
+      clip({ id: "b", mediaItemId: ID.p2, duration: 0.6, transitionIn: "crossfade",
+             transitionDuration: 1.5 }),
+      clip({ id: "c", mediaItemId: ID.p1, duration: 2, transitionIn: "crossfade",
+             transitionDuration: 0.5 }),
+    ],
+  });
+  const briefRan = await runCase("dissolve-longer-than-its-shot", briefDoc, [m.p1, m.p2], files, null);
+  const briefPredicted = timelineDuration(briefDoc, {});
+  if (Math.abs(briefRan - briefPredicted) > 0.35) {
+    console.log(
+      `  ⚠ BENCH AND RENDER DISAGREE: ran ${briefRan.toFixed(2)}s, timeline says ${briefPredicted.toFixed(2)}s`,
+    );
+    failures++;
+  } else {
+    console.log(`  a dissolve longer than its shot matches the timing model ✓ (${briefPredicted.toFixed(2)}s)`);
+  }
 
   console.log(
     failures === 0

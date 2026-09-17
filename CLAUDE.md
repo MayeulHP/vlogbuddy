@@ -74,7 +74,7 @@ raw TypeScript source — no build step, so a change there is live in both apps.
 
 ### The timeline document is the product
 
-`packages/shared/src/timeline.ts` holds `TimelineDoc`, which has three parts:
+`packages/shared/src/timeline.ts` holds `TimelineDoc`, which has four parts:
 
 - `clips` — the base video track, a sequence. The cut engine owns it: the vote decides
   what's in it and in what order.
@@ -85,6 +85,15 @@ raw TypeScript source — no build step, so a change there is live in both apps.
 - `audio` — a stack of tracks mixed underneath. Exactly one carries `role: "bed"` and
   follows the soundtrack lane; the rest are hand-placed cues. Never index `audio[0]` to
   find the bed — look it up by role.
+- `scenes` — the stretches of trip the base track breaks into, derived from capture gaps
+  but **stored**, because the derived name is only a first guess and a person may replace
+  it. A clip points at one by `sceneId`; never by index, which stops being true the moment
+  anything is reordered. Reconciled across a re-cut by *shot membership* — the
+  `reconcileClips` rule widened from one item to a set — so a scene that splits leaves its
+  name on the bigger half. Ids derive from a member clip's `mediaItemId`, never randomly,
+  or the director would churn a revision on every vote forever. A name a person set is
+  protected by the same `auto` provenance as a hand-trimmed clip, through
+  `SCENE_AUTO_FIELDS` and `clearSceneAutoFor`.
 
 The base track sets the running time; layers and audio are clipped to it. It is mutated
 only through `TimelineOp` values fed to the pure reducer `applyTimelineOp`, which runs in
@@ -117,8 +126,21 @@ Screen time is a budget from the item's `rankScore`, banded into three absolute
 tiers against the vlog's `scoreThreshold` — deliberately **not** a percentile of
 the pile, because a percentile is set-relative and one new reaction would re-time
 every other shot. Long videos get a window taken out of their middle rather than
-their whole length. Scenes come from `capturedAt` gaps; the grammar is a hard cut
-within a scene and a dissolve between them.
+their whole length. Scenes come from `capturedAt` gaps, day boundaries, and
+distance: a shot more than `SCENE_MOVE_METRES` (500m) from the scene's **anchor**
+— the first located shot in it, never the previous shot — starts a new one, so a
+walk breaks once per 500m covered instead of never or constantly. Items with no
+fix never break a scene and never move the anchor, and `(0,0)` is read as no fix
+because it is what a camera writes when GPS never locked. The grammar is a hard
+cut within a scene and a dissolve between them. Stills get a slow push or pull
+(`motion`, an auto field of its own), which is what pays for their cap rising
+from four seconds to seven — a still told to hold still gives the time back.
+
+The budget is always *screen* seconds. `clipDuration` is the one place `speed`
+is divided out and `clipSourceSpan` is the pre-speed length the trim window and
+FFmpeg's `-t` both measure; every other timing helper derives from those two, so
+a third opinion about how long a clip is will desynchronise the bench, the
+preview and the render.
 
 Two invariants:
 
@@ -181,13 +203,31 @@ Never let a decrypted key into a server action's return value; `publicConnection
 is the only shape the browser gets. Thumbnails go through
 `/api/immich/[slug]/thumb/[assetId]`, which uses the *caller's own* credentials.
 
+Coordinates are the same kind of secret. `media_items.latitude`/`longitude` reach
+exactly two places: `CutEntry`, built inside `syncCut` and read by the auto-cut,
+and the worker that writes them. **`MediaItemView` deliberately `Omit`s both**,
+because it is serialised into the RSC payload for every member of the vlog — a
+plain `{ ...item }` there once shipped the whole row, and putting the columns
+back on either side would hand everyone's GPS to every browser in the vlog. Any
+new column on `media_items` walks into the same trap.
+
 ### The admin boundary
 
-`/admin` is Basic Auth in `src/middleware.ts`; every admin page and action also
-calls `requireAdmin()` from `lib/admin.ts`, and that second check is the one that
+`/admin` is a signed cookie checked in `src/middleware.ts`, which sends anyone
+without one to the form at `/admin/login`; every admin page and action also calls
+`requireAdmin()` from `lib/admin.ts`, and that second check is the one that
 protects the data — server actions are plain POSTs and a matcher change shouldn't
 be all that stands between a guest and `deleteVlogAction`. `createVlogAction` is
 admin-only too. Anything guest-facing (`/v/[slug]` and its actions) stays open.
+
+It is **not** HTTP Basic Auth, and must not become it again: a navigation served
+through `public/sw.js` can't carry an auth challenge to completion, so the
+browser re-prompts forever, and the prompt is unfillable by a password manager
+besides. The cookie is minted and verified in `lib/admin-session.ts`, which uses
+Web Crypto and imports neither `node:crypto` nor `server-only` — the middleware
+runs in the edge runtime and has to reach the same verdict as the pages do. It
+carries an expiry and a fingerprint of `ADMIN_PASSWORD`, so rotating the password
+(or `SESSION_SECRET`) signs every browser out.
 
 Export format lives in the one-row `app_settings` table, read through
 `getRenderSettings()` in `packages/db` by both the admin page and the render job;
@@ -227,7 +267,24 @@ Browsers PUT straight to MinIO with presigned URLs — media never passes throug
 proxy body limits don't matter for the app, only for the storage host. `pending_uploads`
 tracks the gap between issuing a URL and the client confirming. Job queue is pg-boss on
 the same Postgres (no Redis); queues must be created before `send()` or jobs are silently
-dropped, which both `lib/queue.ts` and the worker's boot do defensively.
+dropped. Both apps create them through `ensureQueues` in `@vlogbuddy/shared/queues`,
+which is also the single place a queue's **policy** is stated — whichever process boots
+first would otherwise decide.
+
+The policy is not decoration. `singletonKey` on a `send()` is enforced only by a partial
+unique index, and each of those is conditioned on the queue's policy, so under the default
+`standard` a key is **accepted and silently ignored** — which is how "one render at a time
+per vlog" was decorative for a while. Renders and both Immich directions run `stately`
+(one active, one waiting, per key); `process-media` stays `standard` because fan-out is
+the point. Two traps behind that:
+
+- `create_queue` inserts `ON CONFLICT DO NOTHING` and returns *without error* on a queue
+  that already exists — it does not raise "already exists". Reconciling a policy only
+  inside a `catch` therefore never runs, and an instance created before the policies
+  existed keeps `standard` forever. `ensureQueues` reconciles unconditionally.
+- A real constraint means `send()` returns **null** when it rejects. Every caller has to
+  handle that or it leaves a row — a `render_jobs` or an `immich_transfers` — waiting on a
+  job that will never exist, which for transfers is a progress bar that never moves.
 
 ## Conventions
 
@@ -243,7 +300,9 @@ Transitions are a curated subset of FFmpeg's `xfade` (eleven, with editors'
 names rather than the filter's). `XFADE_FOR` in `constants.ts` is the single
 place a filter name appears — every other caller asks `overlapsPrevious()`,
 because what the timing code needs to know is whether a clip overlaps the one
-before it, not how it looks. Adding a transition is one entry in three maps.
+before it, not how it looks. Adding a transition is one entry in four maps —
+the fourth, `TRANSITION_EFFECT`, is how the preview plays it in the DOM, kept
+apart from `XFADE_FOR` so no filter name ever reaches a browser bundle.
 
 ## FFmpeg gotchas worth not rediscovering
 

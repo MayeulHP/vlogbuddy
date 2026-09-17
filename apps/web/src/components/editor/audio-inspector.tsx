@@ -103,6 +103,27 @@ export function AudioInspector({
         </label>
 
         <label className="block">
+          <span className="eyebrow-light">
+            {track.duck < 0.005
+              ? "Holds its level under talking"
+              : `Drops ${Math.round(track.duck * 100)}% under talking`}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={track.duck}
+            onChange={(e) => patch({ duck: Number(e.target.value) })}
+            className="slider slider-dark mt-1.5"
+          />
+          <span className="mt-1 block font-mono text-2xs text-ink-500">
+            It only moves while a shot has sound of its own, and comes back up in
+            the gaps.
+          </span>
+        </label>
+
+        <label className="block">
           <span className="timecode text-2xs text-ink-300">
             Comes in at {formatDuration(track.startAt)}
           </span>

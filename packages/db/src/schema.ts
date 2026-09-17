@@ -121,6 +121,23 @@ export const mediaItems = pgTable(
     /** Fallback ordering when there's no capture time. */
     uploadIndex: integer("upload_index").notNull().default(0),
 
+    /**
+     * Where the shutter fired: EXIF GPS for photos, the QuickTime ISO 6709 tag
+     * for iPhone video. Decimal degrees, WGS 84. Kept so a day out can be told
+     * apart from the walk home, and deliberately server-side only — nothing
+     * the browser is shown needs to know where anybody was.
+     */
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
+
+    /**
+     * Whether the file carries a sound track, as the worker found it.
+     * Null means nobody has looked yet — a render referencing `[n:a]` on a
+     * silent video fails outright, so "unknown" and "silent" must not collapse
+     * into the same value.
+     */
+    hasAudio: boolean("has_audio"),
+
     status: processingStatusEnum("status").notNull().default("pending"),
     error: text("error"),
 

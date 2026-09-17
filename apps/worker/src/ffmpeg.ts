@@ -15,6 +15,9 @@ export interface ProbeResult {
   hasAudio: boolean;
   /** From container/EXIF metadata — used for chronological ordering. */
   capturedAt: Date | null;
+  /** Decimal degrees from the container's ISO 6709 tag, when it carries one. */
+  latitude: number | null;
+  longitude: number | null;
   rotation: number;
 }
 
@@ -94,6 +97,12 @@ export async function probe(filePath: string): Promise<ProbeResult> {
 
   const rotation = Math.abs(video?.side_data_list?.[0]?.rotation ?? 0) % 180;
 
+  // An iPhone files the fix under the QuickTime key; everything else that
+  // bothers writes the bare `©xyz` atom, which FFmpeg surfaces as `location`.
+  const where = parseIso6709(
+    tags?.["com.apple.quicktime.location.ISO6709"] ?? tags?.location ?? null,
+  );
+
   return {
     durationSeconds: duration && Number.isFinite(duration) ? duration : null,
     // Swap dimensions when the video is rotated so portrait stays portrait.
@@ -101,8 +110,53 @@ export async function probe(filePath: string): Promise<ProbeResult> {
     height: rotation === 90 ? video?.width ?? null : video?.height ?? null,
     hasAudio,
     capturedAt,
+    latitude: where?.latitude ?? null,
+    longitude: where?.longitude ?? null,
     rotation,
   };
+}
+
+/**
+ * ISO 6709 point strings, as QuickTime carries them: `+48.8582+002.2945/`,
+ * optionally with an altitude and a CRS suffix.
+ *
+ * Each field is sign-prefixed and fixed-width, and the width is the only thing
+ * that says whether the digits are degrees, degrees+minutes or
+ * degrees+minutes+seconds — latitude takes 2 leading digits for plain degrees,
+ * longitude 3. Apple only ever writes the plain form, but the sexagesimal
+ * spellings are legal and cost two lines to honour.
+ */
+export function parseIso6709(
+  value: string | null | undefined,
+): { latitude: number; longitude: number } | null {
+  if (!value) return null;
+
+  const fields = value.match(/[+-]\d+(?:\.\d+)?/g);
+  if (!fields || fields.length < 2) return null;
+
+  const latitude = sexagesimalToDegrees(fields[0], 2);
+  const longitude = sexagesimalToDegrees(fields[1], 3);
+  if (latitude === null || longitude === null) return null;
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+
+  return { latitude, longitude };
+}
+
+function sexagesimalToDegrees(field: string, degreeDigits: number): number | null {
+  const sign = field.startsWith("-") ? -1 : 1;
+  const digits = field.slice(1);
+  const whole = digits.split(".")[0] ?? "";
+
+  // Anything beyond the degrees field is packed minutes, then seconds.
+  const minutes = whole.length >= degreeDigits + 2 ? degreeDigits : 0;
+  const seconds = whole.length >= degreeDigits + 4 ? degreeDigits + 2 : 0;
+
+  const d = Number(minutes ? digits.slice(0, degreeDigits) : digits);
+  const m = minutes ? Number(seconds ? digits.slice(minutes, seconds) : digits.slice(minutes)) : 0;
+  const s = seconds ? Number(digits.slice(seconds)) : 0;
+  if (!Number.isFinite(d) || !Number.isFinite(m) || !Number.isFinite(s)) return null;
+
+  return sign * (d + m / 60 + s / 3600);
 }
 
 /**
@@ -126,6 +180,29 @@ export async function ffmpeg(
   });
 }
 
+/**
+ * Scaling a still has to go through `-filter_complex`, not `-vf`.
+ *
+ * A HEIC is often stored as a grid of 512px tiles, and FFmpeg stitches those
+ * with a complex filtergraph of its own making. `-vf` on a stream already fed
+ * by one is a hard error ("Simple and complex filtering cannot be used
+ * together"), so every iPhone photo written as a grid failed here. Stated as a
+ * complex graph it works for tiled and untiled input alike, so there is no
+ * reason to keep two spellings.
+ */
+function stillImageArgs(input: string, filter: string, quality: string, output: string): string[] {
+  return [
+    "-i", input,
+    "-filter_complex", filter,
+    "-frames:v", "1",
+    // Without this the image2 muxer complains that the name has no sequence
+    // pattern; it writes the frame anyway, but the warning is pure noise.
+    "-update", "1",
+    "-q:v", quality,
+    output,
+  ];
+}
+
 /** Single frame for the dump-view grid. */
 export async function generateThumbnail(
   input: string,
@@ -143,12 +220,7 @@ export async function generateThumbnail(
         "-q:v", "4",
         output,
       ]
-    : [
-        "-i", input,
-        "-vf", "scale=640:-2:force_original_aspect_ratio=decrease",
-        "-q:v", "4",
-        output,
-      ];
+    : stillImageArgs(input, "scale=640:-2:force_original_aspect_ratio=decrease", "4", output);
 
   try {
     await ffmpeg(args);
@@ -166,6 +238,39 @@ export async function generateThumbnail(
     }
     throw err;
   }
+}
+
+/**
+ * Long edge of a photo proxy. Generous enough that a lightbox on a retina
+ * screen still looks like the photograph, and about a twentieth of the pixels
+ * of a 48MP original.
+ */
+export const PHOTO_PROXY_MAX_EDGE = 2560;
+
+/**
+ * A JPEG the browser can actually paint.
+ *
+ * Nothing but Safari renders HEIC, so an iPhone photo is invisible in the pile,
+ * the editor and the preview until we hand it over as something else. The same
+ * pass caps the frame, which is what keeps a 48MP original from being
+ * downloaded whole into a preview that shows it 800px wide.
+ *
+ * `min(iw, …)` rather than a flat scale so this only ever shrinks: a small
+ * photo is left at its own size instead of being blown up into a bigger file
+ * than the original. `force_divisible_by=2` keeps the dimensions even, which
+ * yuvj420p requires.
+ */
+export async function generatePhotoProxy(input: string, output: string): Promise<void> {
+  const cap = PHOTO_PROXY_MAX_EDGE;
+  await ffmpeg(
+    stillImageArgs(
+      input,
+      `scale=w=min(iw\\,${cap}):h=min(ih\\,${cap}):` +
+        "force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuvj420p",
+      "3",
+      output,
+    ),
+  );
 }
 
 /**

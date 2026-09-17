@@ -39,7 +39,13 @@ export interface ReactionTotals {
   rank: number;
 }
 
-export interface MediaItemView extends MediaItem {
+/**
+ * Everything on the row except where it was taken. Coordinates are read off a
+ * file's EXIF and kept for the cut's own use; nothing the browser renders needs
+ * them, and this is a view that gets serialised into the page for every member
+ * of the vlog. Dropped here rather than at each call site so it stays dropped.
+ */
+export interface MediaItemView extends Omit<MediaItem, "latitude" | "longitude"> {
   uploaderName: string | null;
   thumbnailUrl: string | null;
   proxyUrl: string | null;
@@ -137,8 +143,9 @@ export async function getMediaItems(
           ? presignDownload(item.storageKey)
           : Promise.resolve(null),
       ]);
+      const { latitude: _lat, longitude: _lon, ...shareable } = item;
       return {
-        ...item,
+        ...shareable,
         uploaderName,
         thumbnailUrl,
         proxyUrl,

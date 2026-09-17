@@ -11,6 +11,7 @@ import {
   vlogs,
 } from "@vlogbuddy/db";
 import {
+  DEFAULT_BED_DUCK,
   emptyTimeline,
   normalizeTimeline,
   pruneTimelineReferences,
@@ -56,6 +57,9 @@ interface MediaRow {
   durationSeconds: number | null;
   status: "pending" | "processing" | "ready" | "failed";
   cutOverride: "include" | "exclude" | null;
+  /** Where it was shot, for the auto-cut's scene breaks. Never leaves here. */
+  latitude: number | null;
+  longitude: number | null;
   /** Audio uploads only: the beat grid the worker measured. */
   bpm: number | null;
   beatOffsetSeconds: number | null;
@@ -194,6 +198,8 @@ export async function syncCut(
           durationSeconds: mediaItems.durationSeconds,
           status: mediaItems.status,
           cutOverride: mediaItems.cutOverride,
+          latitude: mediaItems.latitude,
+          longitude: mediaItems.longitude,
           bpm: mediaItems.bpm,
           beatOffsetSeconds: mediaItems.beatOffsetSeconds,
           beatTimes: mediaItems.beatTimes,
@@ -315,6 +321,8 @@ export async function syncCut(
         kind: item.kind === "video" ? ("video" as const) : ("photo" as const),
         durationSeconds: item.durationSeconds,
         capturedAt: item.capturedAt?.getTime() ?? null,
+        latitude: item.latitude,
+        longitude: item.longitude,
         rank: rankOf.get(`media:${item.id}`) ?? 0,
       },
     ];
@@ -421,6 +429,7 @@ function reconcileAudio(
     startAt: Math.max(0, startAt),
     duration: existing?.duration ?? null,
     volume: existing?.volume ?? 0.8,
+    duck: existing?.duck ?? DEFAULT_BED_DUCK,
     fadeIn: existing?.fadeIn ?? 1,
     fadeOut: existing?.fadeOut ?? 2,
     muted: existing?.muted ?? false,

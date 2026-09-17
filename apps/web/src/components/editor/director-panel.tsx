@@ -5,12 +5,9 @@ import {
   PACE_BLURBS,
   PACE_LABELS,
   PACE_PRESETS,
-  detectScenes,
-  type CutEntry,
   type Pace,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
-import type { MediaItemView } from "@/lib/queries";
 import { runDirectorAction } from "@/lib/actions/timeline";
 import { cn } from "@/lib/cn";
 
@@ -27,12 +24,10 @@ import { cn } from "@/lib/cn";
 export function DirectorPanel({
   slug,
   timeline,
-  mediaById,
   locked,
 }: {
   slug: string;
   timeline: TimelineDoc;
-  mediaById: Map<string, MediaItemView>;
   locked: boolean;
 }) {
   const [pending, startTransition] = useTransition();
@@ -41,20 +36,12 @@ export function DirectorPanel({
 
   const director = timeline.director;
 
-  // The same scene detection the floor shows, so both rooms agree on where the
-  // days break.
-  const cut: CutEntry[] = timeline.clips.map((c) => {
-    const media = mediaById.get(c.mediaItemId);
-    return {
-      mediaItemId: c.mediaItemId,
-      kind: c.kind,
-      durationSeconds: media?.durationSeconds ?? null,
-      capturedAt: media?.capturedAt ? new Date(media.capturedAt).getTime() : null,
-      rank: media?.reactions.rank ?? 0,
-    };
-  });
-  const scenes = detectScenes(cut);
+  // The scenes the document carries — the same ones the floor bands the rough
+  // cut with and the ruler marks on the strip, so nobody has to wonder whether
+  // two rooms are counting the days differently.
+  const scenes = timeline.scenes;
   const handCut = timeline.clips.filter((c) => c.auto.length === 0).length;
+  const named = scenes.filter((s) => !s.auto.includes("name")).length;
 
   function run(input: Parameters<typeof runDirectorAction>[1]) {
     setError(null);
@@ -161,6 +148,8 @@ export function DirectorPanel({
                 {handCut > 0
                   ? `This puts all ${timeline.clips.length} shots back to the length the crew's marks suggest — including the ${handCut} ${handCut === 1 ? "you've" : "you've"} trimmed by hand. There's no undo.`
                   : "This puts every shot back to the length the crew's marks suggest. There's no undo."}
+                {named > 0 &&
+                  ` Your scene name${named === 1 ? "" : "s"} go${named === 1 ? "es" : ""} back to the date too.`}
               </p>
               <div className="flex gap-2">
                 <button
@@ -195,6 +184,12 @@ export function DirectorPanel({
                 <p className="mt-2 text-2xs leading-relaxed text-ink-400">
                   {handCut} {handCut === 1 ? "shot is" : "shots are"} cut by hand — the auto-cut
                   leaves {handCut === 1 ? "it" : "them"} alone.
+                </p>
+              )}
+              {named > 0 && (
+                <p className="mt-2 text-2xs leading-relaxed text-ink-400">
+                  {named} {named === 1 ? "scene has" : "scenes have"} a name you gave{" "}
+                  {named === 1 ? "it" : "them"} — starting again puts the dates back.
                 </p>
               )}
             </>

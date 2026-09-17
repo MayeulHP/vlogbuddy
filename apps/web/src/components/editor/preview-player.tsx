@@ -2,14 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  MOTION_ZOOM,
+  TRANSITION_EFFECT,
   audioTrackSpan,
+  clipDuration,
+  clipSpeed,
   clipStartTimes,
   formatDuration,
+  isGraded,
   layersInPaintOrder,
+  movesFrame,
+  overlapsPrevious,
+  transitionOverlap,
   timelineDuration,
   type AudioTrack,
+  type Clip,
   type LayerClip,
   type TimelineDoc,
+  type TransitionEffect,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
@@ -20,6 +30,158 @@ import { cn } from "@/lib/cn";
  * stack underneath — close enough to judge pacing and placement without
  * rendering anything. The real output comes from FFmpeg server-side.
  */
+
+/**
+ * The grade, as far as CSS can carry it.
+ *
+ * An approximation on purpose, and the two places it bends: FFmpeg's `eq`
+ * brightness is *added* to each sample where the CSS filter multiplies, and
+ * `gblur`'s sigma is in render pixels where the preview box is whatever width
+ * the browser gave it. Close enough to judge a look by; the render is the
+ * authority, as it is for the transitions below.
+ */
+function gradeStyle(clip: Clip): string | undefined {
+  if (!isGraded(clip)) return undefined;
+  const parts: string[] = [];
+  if (clip.brightness !== 0) parts.push(`brightness(${(1 + clip.brightness).toFixed(3)})`);
+  if (clip.contrast !== 1) parts.push(`contrast(${clip.contrast.toFixed(3)})`);
+  if (clip.saturation !== 1) parts.push(`saturate(${clip.saturation.toFixed(3)})`);
+  if (clip.hue !== 0) parts.push(`hue-rotate(${clip.hue.toFixed(1)}deg)`);
+  if (clip.blur > 0) parts.push(`blur(${(clip.blur / 3).toFixed(2)}px)`);
+  return parts.join(" ");
+}
+
+/** Where the Ken Burns move has got to, as a scale factor. */
+function motionScale(clip: Clip, offset: number, duration: number): number | undefined {
+  if (!movesFrame(clip.motion) || duration <= 0) return undefined;
+  const progress = Math.max(0, Math.min(1, offset / duration));
+  return clip.motion === "punchin"
+    ? 1 + (MOTION_ZOOM - 1) * progress
+    : MOTION_ZOOM - (MOTION_ZOOM - 1) * progress;
+}
+
+/**
+ * A `circle()` radius is a percentage of the box's diagonal over √2, so 70.8%
+ * reaches the corners whatever the aspect ratio. A hair over, so the last
+ * frame of an iris is unambiguously clear of them.
+ */
+const IRIS_RADIUS = 72;
+
+/** How soft `pixelize` goes at its midpoint. See `TRANSITION_EFFECT`. */
+const PIXELIZE_BLUR = 10;
+
+/**
+ * How long the preview takes to push the score down, and to let it back up.
+ *
+ * The render ducks with `sidechaincompress`, which follows the *envelope* of
+ * the shots' own sound — down on the front of a word, back up in the pause
+ * after it, on a 20 ms attack and a 350 ms release. This follows only whether
+ * an audible shot is on screen, so it's a rectangle where the export has a
+ * waveform: the depth is right and the breathing isn't. The slew is here
+ * because a step change in an element's `volume` clicks, and symmetric because
+ * a preview has no envelope to be asymmetric about.
+ */
+const DUCK_RAMP = 0.15;
+
+/**
+ * Does this shot lean on the score?
+ *
+ * A video with no audio stream at all — a screen capture, a camera in a silent
+ * mode — never opens the duck in the render, because `render.ts` feeds silence
+ * in its place. Nothing readable from a `<video>` answers that before the shot
+ * has played, so the answer comes from the row: `process-media` probed it while
+ * the file was on disk.
+ *
+ * `hasAudio` is null on anything processed before that column existed. Null is
+ * treated as "assume it has sound", which is the old behaviour and errs towards
+ * ducking music that didn't need it — a wrong level for a moment, rather than a
+ * preview that silently stops ducking every older shot in the pile.
+ */
+function opensTheDuck(clip: Clip, media: MediaItemView | undefined): boolean {
+  if (clip.kind !== "video" || clip.muted || clip.volume <= 0 || !clip.duckMusic) return false;
+  return media?.hasAudio !== false;
+}
+
+/**
+ * The transition, as two stacked DOM layers.
+ *
+ * The outgoing shot is opaque underneath and the incoming one is composited
+ * over it, which is what makes the plain dissolve exact: an incoming layer at
+ * opacity p over an opaque outgoing layer is the same sum `xfade=fade`
+ * computes. Everything else is an impression — a wipe has no soft edge, a dip
+ * fades to a flat sheet rather than through the filter's curve — but the
+ * shape, direction and timing of the move are right, which is what the preview
+ * is for.
+ */
+function transitionStyles(
+  effect: TransitionEffect,
+  progress: number,
+): {
+  outgoing: React.CSSProperties;
+  incoming: React.CSSProperties;
+  /** A sheet of colour behind both layers, for the dips. */
+  veil: string | null;
+  /** An iris that closes belongs on top; everything else reads bottom-up. */
+  outgoingOnTop: boolean;
+} {
+  const p = Math.max(0, Math.min(1, progress));
+  const base = { outgoing: {}, incoming: {}, veil: null, outgoingOnTop: false };
+  const pct = (n: number) => `${(n * 100).toFixed(2)}%`;
+
+  switch (effect.kind) {
+    case "none":
+      return base;
+    case "dissolve":
+      return { ...base, incoming: { opacity: p } };
+    case "dip":
+      // Out to the colour over the first half, in from it over the second —
+      // the two halves `fadeblack`/`fadewhite` play.
+      return {
+        ...base,
+        veil: effect.colour,
+        outgoing: { opacity: Math.max(0, 1 - p * 2) },
+        incoming: { opacity: Math.max(0, p * 2 - 1) },
+      };
+    case "wipe":
+      return {
+        ...base,
+        incoming: {
+          clipPath:
+            effect.towards === "left"
+              ? `inset(0 0 0 ${pct(1 - p)})`
+              : `inset(0 ${pct(1 - p)} 0 0)`,
+        },
+      };
+    case "push": {
+      const away = effect.towards === "left" ? -1 : 1;
+      return {
+        ...base,
+        outgoing: { transform: `translateX(${pct(away * p)})` },
+        incoming: { transform: `translateX(${pct(-away * (1 - p))})` },
+      };
+    }
+    case "iris":
+      return effect.circle === "incoming"
+        ? {
+            ...base,
+            incoming: { clipPath: `circle(${(p * IRIS_RADIUS).toFixed(2)}% at 50% 50%)` },
+          }
+        : {
+            ...base,
+            outgoingOnTop: true,
+            outgoing: {
+              clipPath: `circle(${((1 - p) * IRIS_RADIUS).toFixed(2)}% at 50% 50%)`,
+            },
+          };
+    case "blur": {
+      // Softest in the middle, where the render is at its blockiest.
+      const soft = PIXELIZE_BLUR * (1 - Math.abs(1 - p * 2));
+      const filter = `blur(${soft.toFixed(2)}px)`;
+      return { ...base, outgoing: { filter }, incoming: { filter, opacity: p } };
+    }
+  }
+}
+
 export function PreviewPlayer({
   timeline,
   mediaById,
@@ -39,7 +201,6 @@ export function PreviewPlayer({
   selectedClipId: string | null;
   onSelectClip: (id: string) => void;
 }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
   const rafRef = useRef<number | null>(null);
   /**
@@ -98,6 +259,80 @@ export function PreviewPlayer({
 
   const activeMedia = active ? mediaById.get(active.clip.mediaItemId) ?? null : null;
 
+  /**
+   * The shot the active clip is coming out of, while the playhead is still
+   * inside the overlap.
+   *
+   * The length has to be the renderer's, or the preview shows a move of a
+   * different weight to the one that gets exported — so it asks
+   * `transitionOverlap` with the film-so-far, which is the same call
+   * `render.ts` makes with its `offset`.
+   */
+  const transition = useMemo(() => {
+    if (!active || active.index === 0) return null;
+    const clip = active.clip;
+    if (!overlapsPrevious(clip.transitionIn)) return null;
+
+    const previous = timeline.clips[active.index - 1];
+    if (!previous) return null;
+
+    const previousStart = starts[previous.id] ?? 0;
+    const previousDuration = clipDuration(previous, durations[previous.mediaItemId]);
+    const duration = transitionOverlap(
+      clip,
+      clipDuration(clip, durations[clip.mediaItemId]),
+      previousStart + previousDuration,
+    );
+    if (duration <= 0.02 || active.offset >= duration) return null;
+
+    return {
+      clip: previous,
+      offset: playheadTime - previousStart,
+      duration: previousDuration,
+      effect: TRANSITION_EFFECT[clip.transitionIn],
+      progress: active.offset / duration,
+    };
+  }, [active, timeline.clips, starts, durations, playheadTime]);
+
+  /**
+   * The stretches of film where a shot's own sound leans on the score.
+   *
+   * Merged as they're collected: two audible shots in a row are one continuous
+   * duck, and the music lifting for the frame between them is the artefact the
+   * renderer's release time exists to avoid.
+   */
+  const duckWindows = useMemo(() => {
+    const windows: Array<[number, number]> = [];
+    if (!timeline.duckClipAudio) return windows;
+    for (const clip of timeline.clips) {
+      if (!opensTheDuck(clip, mediaById.get(clip.mediaItemId))) continue;
+      const start = starts[clip.id] ?? 0;
+      const end = start + clipDuration(clip, durations[clip.mediaItemId]);
+      const last = windows[windows.length - 1];
+      if (last && start <= last[1] + 0.001) last[1] = Math.max(last[1], end);
+      else windows.push([start, end]);
+    }
+    return windows;
+  }, [timeline.duckClipAudio, timeline.clips, starts, durations, mediaById]);
+
+  /**
+   * How far the duck is in under the playhead: 0 leaves the score where its
+   * level says, 1 is the full depth each track asks for. Read off the playhead
+   * rather than a wall clock, so scrubbing lands on the same level playing
+   * through does.
+   */
+  const duckAmount = useMemo(() => {
+    let amount = 0;
+    for (const [from, to] of duckWindows) {
+      if (playheadTime <= from || playheadTime >= to + DUCK_RAMP) continue;
+      const rampIn = (playheadTime - from) / DUCK_RAMP;
+      const rampOut = (to + DUCK_RAMP - playheadTime) / DUCK_RAMP;
+      amount = Math.max(amount, Math.min(1, rampIn, rampOut));
+      if (amount >= 1) break;
+    }
+    return amount;
+  }, [duckWindows, playheadTime]);
+
   const visibleLayers = useMemo(
     () =>
       layersInPaintOrder(timeline).filter(
@@ -129,20 +364,6 @@ export function PreviewPlayer({
     };
   }, [playing, playheadTime, total, onTimeChange]);
 
-  // Keep the <video> in sync with the playhead.
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !active || active.clip.kind !== "video") return;
-
-    const target = active.clip.trimStart + active.offset;
-    if (Math.abs(video.currentTime - target) > 0.35) {
-      video.currentTime = Math.max(0, target);
-    }
-
-    if (playing && video.paused) void video.play().catch(() => {});
-    if (!playing && !video.paused) video.pause();
-  }, [active, playing]);
-
   // Selecting a clip in the timeline jumps the playhead to it.
   useEffect(() => {
     if (!selectedClipId) return;
@@ -169,11 +390,45 @@ export function PreviewPlayer({
     );
   }
 
-  const src = activeMedia
-    ? active?.clip.kind === "video"
-      ? activeMedia.proxyUrl ?? activeMedia.originalUrl
-      : activeMedia.originalUrl ?? activeMedia.thumbnailUrl
-    : null;
+  const src = active ? pictureSrc(active.clip, activeMedia) : null;
+  const fx = transition ? transitionStyles(transition.effect, transition.progress) : null;
+
+  // Two layers during a transition, one the rest of the time. Painted in DOM
+  // order, so the incoming shot sits over the outgoing one unless the effect
+  // asks for the other way round.
+  const stack = [
+    transition && fx ? (
+      <ClipView
+        key={transition.clip.id}
+        clip={transition.clip}
+        media={mediaById.get(transition.clip.mediaItemId) ?? null}
+        offset={transition.offset}
+        duration={transition.duration}
+        playing={playing}
+        style={fx.outgoing}
+        gain={1 - transition.progress}
+      />
+    ) : null,
+    active && src ? (
+      <ClipView
+        key={active.clip.id}
+        clip={active.clip}
+        media={activeMedia}
+        offset={active.offset}
+        duration={clipDuration(active.clip, durations[active.clip.mediaItemId])}
+        playing={playing}
+        style={fx?.incoming}
+        gain={transition ? transition.progress : 1}
+        onEnded={() => {
+          // Roll into the next clip.
+          const next = timeline.clips[active.index + 1];
+          if (next) seek(starts[next.id] ?? playheadTime);
+          else setPlaying(false);
+        }}
+      />
+    ) : null,
+  ];
+  if (fx?.outgoingOnTop) stack.reverse();
 
   return (
     <div className="border border-[color:var(--hair-dark)] bg-ink-950">
@@ -181,26 +436,10 @@ export function PreviewPlayer({
           preview has to agree — a tall portrait inset otherwise spills out
           over the transport. */}
       <div className="relative aspect-video overflow-hidden bg-black">
+        {fx?.veil && <div className="absolute inset-0" style={{ background: fx.veil }} />}
+
         {src ? (
-          active?.clip.kind === "video" ? (
-            <video
-              ref={videoRef}
-              key={active.clip.id}
-              src={src}
-              className="h-full w-full object-contain"
-              playsInline
-              muted={active.clip.muted}
-              onEnded={() => {
-                // Roll into the next clip.
-                const next = timeline.clips[active.index + 1];
-                if (next) seek(starts[next.id] ?? playheadTime);
-                else setPlaying(false);
-              }}
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt="" className="h-full w-full object-contain" />
-          )
+          stack
         ) : (
           <div className="flex h-full items-center justify-center font-mono text-2xs uppercase tracking-label text-ink-500">
             Developing…
@@ -255,6 +494,7 @@ export function PreviewPlayer({
           track={track}
           src={audioSrcFor(track, mediaById, musicById)}
           span={audioTrackSpan(track, total)}
+          duck={duckAmount}
           playheadTime={playheadTime}
           playing={playing}
           onElement={registerAudio}
@@ -315,6 +555,97 @@ export function PreviewPlayer({
 }
 
 /**
+ * The file a clip plays from. Photos take the proxy too when there is one —
+ * an iPhone HEIC has no picture in it as far as a browser is concerned, and
+ * the proxy is the JPEG that does.
+ */
+function pictureSrc(clip: Clip | LayerClip, media: MediaItemView | null): string | null {
+  if (!media) return null;
+  return media.proxyUrl ?? media.originalUrl ?? (clip.kind === "photo" ? media.thumbnailUrl : null);
+}
+
+/**
+ * One shot of the base track, filling the frame.
+ *
+ * It exists as its own component because a transition needs two of them on
+ * screen at once, each seeking its own source — the playhead stays the
+ * player's, and this only ever follows it. `style` is the transition's; the
+ * grade and the Ken Burns move stay on the picture inside, so a shot keeps
+ * both while it dissolves.
+ */
+function ClipView({
+  clip,
+  media,
+  offset,
+  duration,
+  playing,
+  style,
+  gain = 1,
+  onEnded,
+}: {
+  clip: Clip;
+  media: MediaItemView | null;
+  offset: number;
+  duration: number;
+  playing: boolean;
+  style?: React.CSSProperties;
+  /** The transition's side of the `acrossfade` the renderer performs. */
+  gain?: number;
+  onEnded?: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || clip.kind !== "video") return;
+
+    video.volume = Math.max(0, Math.min(1, gain));
+
+    // A retimed shot spends its source faster than it spends the playhead, so
+    // the seek target is scaled as well as the rate — otherwise the picture
+    // drifts further out of step the longer the shot runs.
+    const speed = clipSpeed(clip);
+    video.playbackRate = speed;
+
+    const target = clip.trimStart + offset * speed;
+    if (Math.abs(video.currentTime - target) > 0.35) {
+      video.currentTime = Math.max(0, target);
+    }
+
+    if (playing && video.paused) void video.play().catch(() => {});
+    if (!playing && !video.paused) video.pause();
+  }, [clip, offset, playing, gain]);
+
+  const src = pictureSrc(clip, media);
+  if (!src) return null;
+
+  const scale = motionScale(clip, offset, duration);
+  const pictureStyle: React.CSSProperties = {
+    filter: gradeStyle(clip),
+    transform: scale === undefined ? undefined : `scale(${scale.toFixed(4)})`,
+  };
+
+  return (
+    <div className="absolute inset-0" style={style}>
+      {clip.kind === "video" ? (
+        <video
+          ref={videoRef}
+          src={src}
+          style={pictureStyle}
+          className="h-full w-full object-contain"
+          playsInline
+          muted={clip.muted}
+          onEnded={onEnded}
+        />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" style={pictureStyle} className="h-full w-full object-contain" />
+      )}
+    </div>
+  );
+}
+
+/**
  * One layer over the picture. Geometry is stored as fractions of the frame, so
  * percentages here land in the same place FFmpeg will put them.
  */
@@ -355,7 +686,7 @@ function LayerView({
         ? Math.max(0, (layer.duration - offset) / fadeOut)
         : 1;
 
-  const src = layer.kind === "video" ? media.proxyUrl ?? media.originalUrl : media.originalUrl;
+  const src = pictureSrc(layer, media);
   if (!src) return null;
 
   const style: React.CSSProperties = {
@@ -383,14 +714,15 @@ function LayerView({
 
 /**
  * An audio track, kept in step with the playhead — the same clock the picture
- * runs on, so scrubbing, playing and pausing can't drift apart. Fades and
- * looping are mirrored from the renderer so the preview doesn't lie about the
- * mix.
+ * runs on, so scrubbing, playing and pausing can't drift apart. Fades,
+ * looping and the duck are mirrored from the renderer so the preview doesn't
+ * lie about the mix.
  */
 function TrackAudio({
   track,
   src,
   span,
+  duck,
   playheadTime,
   playing,
   onElement,
@@ -398,6 +730,8 @@ function TrackAudio({
   track: AudioTrack;
   src: string | null;
   span: number;
+  /** How far the shots are pushing the score down right now, 0–1. */
+  duck: number;
   playheadTime: number;
   playing: boolean;
   onElement: (id: string, el: HTMLAudioElement | null) => void;
@@ -430,7 +764,10 @@ function TrackAudio({
         : fadeOut > 0.01 && elapsed > span - fadeOut
           ? Math.max(0, (span - elapsed) / fadeOut)
           : 1;
-    audio.volume = Math.max(0, Math.min(1, track.volume * fade));
+    // The duck sits on top of whatever the fades are already doing: `duck` is
+    // when the score gets out of the way, `track.duck` how far this particular
+    // track answers it.
+    audio.volume = Math.max(0, Math.min(1, track.volume * fade * (1 - track.duck * duck)));
 
     const fileDuration =
       Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
@@ -462,7 +799,9 @@ function TrackAudio({
     playheadTime,
     playing,
     span,
+    duck,
     metadataSeq,
+    track.duck,
     track.muted,
     track.offset,
     track.startAt,

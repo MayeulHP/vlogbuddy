@@ -29,7 +29,10 @@ export function Lightbox({
     };
   }, [onClose]);
 
-  const src = item.kind === "video" ? item.proxyUrl ?? item.originalUrl : item.originalUrl;
+  // Photos get a proxy too now — a JPEG standing in for an iPhone's HEIC, which
+  // no browser but Safari will paint, or for an original too big to be worth
+  // downloading whole just to look at it.
+  const src = item.proxyUrl ?? item.originalUrl;
 
   // The scrim is `/95`, not `/97`: 97 isn't a step on Tailwind's opacity scale,
   // so it compiled to no background at all and the lightbox was see-through.

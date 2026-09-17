@@ -1,17 +1,50 @@
 "use client";
 
 import {
+  MOTIONS,
+  MOTION_GLYPHS,
+  MOTION_LABELS,
+  SPEED_PRESETS,
   TRANSITIONS,
   TRANSITION_GLYPHS,
   TRANSITION_LABELS,
   clipDuration,
+  clipSourceSpan,
   formatDuration,
+  isGraded,
   overlapsPrevious,
   type Clip,
   type TimelineOp,
 } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
+
+/**
+ * The grade, as the inspector offers it. Each row carries its own neutral so
+ * "is this dialled in?" is one comparison rather than five special cases.
+ */
+const GRADE_ROWS = [
+  { key: "brightness", label: "Brightness", min: -1, max: 1, step: 0.02, neutral: 0 },
+  { key: "contrast", label: "Contrast", min: 0, max: 3, step: 0.05, neutral: 1 },
+  { key: "saturation", label: "Colour", min: 0, max: 3, step: 0.05, neutral: 1 },
+  { key: "hue", label: "Hue", min: -180, max: 180, step: 1, neutral: 0 },
+  { key: "blur", label: "Blur", min: 0, max: 20, step: 0.5, neutral: 0 },
+] as const satisfies readonly {
+  key: keyof Clip;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  neutral: number;
+}[];
+
+const NEUTRAL_GRADE = {
+  brightness: 0,
+  contrast: 1,
+  saturation: 1,
+  hue: 0,
+  blur: 0,
+} as const;
 
 /** Trim, title and transition controls for the selected shot. */
 export function ClipInspector({
@@ -190,6 +223,108 @@ export function ClipInspector({
           </label>
         )}
 
+        {/*
+          The move, for stills only. A photograph that drifts holds an eye the
+          way footage does — which is the only reason the auto-cut will let a
+          still run past four seconds.
+        */}
+        {clip.kind === "photo" && (
+          <div>
+            <p className="eyebrow-light mb-1.5">Moves</p>
+            <div className="grid grid-cols-3 gap-px border border-[color:var(--hair-dark)]">
+              {MOTIONS.map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => patch({ motion: mode })}
+                  title={MOTION_LABELS[mode]}
+                  className={cn(
+                    "flex items-center justify-center gap-1.5 py-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                    clip.motion === mode
+                      ? "bg-signal-600 text-paper-50"
+                      : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
+                  )}
+                >
+                  <span aria-hidden>{MOTION_GLYPHS[mode]}</span>
+                  {MOTION_LABELS[mode]}
+                </button>
+              ))}
+            </div>
+            {clip.auto.includes("motion") && (
+              <p className="mt-1.5 font-mono text-2xs text-ink-500">
+                The auto-cut&apos;s pick. Choose one and it&apos;s yours.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Speed, for video. */}
+        {clip.kind === "video" && sourceDuration ? (
+          <div>
+            <p className="eyebrow-light mb-1.5">Speed</p>
+            <div className="grid grid-cols-6 gap-px border border-[color:var(--hair-dark)]">
+              {SPEED_PRESETS.map((rate) => (
+                <button
+                  key={rate}
+                  onClick={() => patch({ speed: rate })}
+                  className={cn(
+                    "py-2 font-mono text-2xs tracking-label transition-colors",
+                    clip.speed === rate
+                      ? "bg-signal-600 text-paper-50"
+                      : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
+                  )}
+                >
+                  {rate}×
+                </button>
+              ))}
+            </div>
+            {clip.speed !== 1 && (
+              <p className="mt-1.5 font-mono text-2xs text-ink-500">
+                {formatDuration(clipSourceSpan(clip, sourceDuration))} of footage,{" "}
+                {formatDuration(effective)} on screen.
+              </p>
+            )}
+          </div>
+        ) : null}
+
+        {/* The grade. */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="eyebrow-light">Look</p>
+            {isGraded(clip) && (
+              <button onClick={() => patch(NEUTRAL_GRADE)} className="btn-quiet-dark px-0">
+                Reset
+              </button>
+            )}
+          </div>
+          <div className="space-y-2.5">
+            {GRADE_ROWS.map((row) => {
+              const value = clip[row.key] as number;
+              return (
+                <label key={row.key} className="block">
+                  <span
+                    className={cn(
+                      "timecode text-2xs",
+                      value === row.neutral ? "text-ink-400" : "text-paper-100",
+                    )}
+                  >
+                    {row.label}
+                    {value !== row.neutral && ` — ${value}`}
+                  </span>
+                  <input
+                    type="range"
+                    min={row.min}
+                    max={row.max}
+                    step={row.step}
+                    value={value}
+                    onChange={(e) => patch({ [row.key]: Number(e.target.value) })}
+                    className="slider slider-dark mt-1"
+                  />
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Transition */}
         <div>
           <p className="eyebrow-light mb-1.5">Comes in on</p>
@@ -251,16 +386,32 @@ export function ClipInspector({
               Keep this shot&apos;s sound
             </label>
             {!clip.muted && (
-              <input
-                type="range"
-                min={0}
-                max={2}
-                step={0.05}
-                value={clip.volume}
-                onChange={(e) => patch({ volume: Number(e.target.value) })}
-                className="slider slider-dark mt-2.5"
-                aria-label="Shot level"
-              />
+              <>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={clip.volume}
+                  onChange={(e) => patch({ volume: Number(e.target.value) })}
+                  className="slider slider-dark mt-2.5"
+                  aria-label="Shot level"
+                />
+                <label className="mt-2.5 flex items-center gap-2 font-mono text-2xs uppercase tracking-label text-ink-300">
+                  <input
+                    type="checkbox"
+                    checked={clip.duckMusic}
+                    onChange={(e) => patch({ duckMusic: e.target.checked })}
+                    className="check check-dark"
+                  />
+                  Push the music down here
+                </label>
+                {!clip.duckMusic && (
+                  <p className="mt-1 font-mono text-2xs text-ink-500">
+                    The score stays where it is over this shot.
+                  </p>
+                )}
+              </>
             )}
           </div>
         )}

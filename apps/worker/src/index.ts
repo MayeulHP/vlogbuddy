@@ -7,8 +7,8 @@ import { extractAudio, type ExtractAudioJob } from "./jobs/extract-audio";
 import { renderVlog, type RenderJobPayload } from "./jobs/render";
 import { immichImport, type ImmichImportJob } from "./jobs/immich-import";
 import { immichExport, type ImmichExportJob } from "./jobs/immich-export";
+import { ensureQueues } from "@vlogbuddy/shared/queues";
 import {
-  ALL_QUEUES,
   QUEUE_EXTRACT_AUDIO,
   QUEUE_IMMICH_EXPORT,
   QUEUE_IMMICH_IMPORT,
@@ -34,15 +34,10 @@ async function main() {
   setBoss(boss);
 
   // pg-boss v10 requires queues to exist before send()/work() — without this,
-  // jobs are silently dropped and nothing ever processes.
-  for (const queue of ALL_QUEUES) {
-    try {
-      await boss.createQueue(queue);
-    } catch (err) {
-      // Already exists — fine, this runs on every boot.
-      if (!/already exists/i.test((err as Error).message)) throw err;
-    }
-  }
+  // jobs are silently dropped and nothing ever processes. This also corrects
+  // the policy of a queue created before the policies were set, which is what
+  // makes `singletonKey` mean anything at all.
+  await ensureQueues(boss);
 
   console.log("[worker] connected to queue");
 

@@ -3,12 +3,9 @@
 import { useMemo, useState, useTransition } from "react";
 import {
   clipDuration,
-  detectScenes,
   estimatedClipDuration,
   formatDuration,
-  sceneLabel,
   timelineDuration,
-  type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
@@ -74,26 +71,27 @@ export function FinalCut({
   }, [timeline.clips, byId, pendingOrder]);
 
   /**
-   * Where the trip breaks into scenes. The same detection the auto-cut uses,
-   * run here over the rough cut so the strip reads as days and outings rather
-   * than an undifferentiated run of thumbnails — and so the dissolves the cut
-   * puts at each break have something visible to correspond to.
+   * Where the trip breaks into scenes, so the strip reads as days and outings
+   * rather than an undifferentiated run of thumbnails — and so the dissolves
+   * the cut puts at each break have something visible to correspond to.
+   *
+   * Read off the document rather than worked out here: the names are the ones
+   * the auto-cut chose or somebody typed on the bench, and the two rooms have
+   * to be looking at the same film. A band opens wherever a shot belongs to a
+   * different scene from the one before it, which stays true mid-drag while
+   * the running order is still settling.
    */
   const sceneLabels = useMemo(() => {
-    const entries: CutEntry[] = inCut.map(({ clip, item }) => ({
-      mediaItemId: item.id,
-      kind: clip.kind,
-      durationSeconds: item.durationSeconds,
-      capturedAt: item.capturedAt ? new Date(item.capturedAt).getTime() : null,
-      rank: item.reactions.rank,
-    }));
+    const names = new Map(timeline.scenes.map((s) => [s.id, s.name]));
     const out = new Map<number, string>();
-    detectScenes(entries).forEach((scene, n) => {
-      const label = sceneLabel(scene, n);
-      if (label) out.set(scene.startIndex, label);
+    let previous: string | null = null;
+    inCut.forEach(({ clip }, index) => {
+      const name = clip.sceneId ? names.get(clip.sceneId) : undefined;
+      if (clip.sceneId !== previous && name) out.set(index, name);
+      previous = clip.sceneId;
     });
     return out;
-  }, [inCut]);
+  }, [inCut, timeline.scenes]);
 
   const leftOut = useMemo(() => {
     const inCutIds = new Set(timeline.clips.map((c) => c.mediaItemId));

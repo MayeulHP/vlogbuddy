@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx watch --clear-screen=false --env-file-if-exists=../../.env src/index.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/index.ts",
     "render-check": "tsx src/render-check.ts",
+    "backfill-photo-proxies": "tsx --env-file-if-exists=../../.env src/backfill-photo-proxies.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -14,6 +15,7 @@
     "@vlogbuddy/db": "workspace:*",
     "@vlogbuddy/shared": "workspace:*",
     "drizzle-orm": "^0.36.4",
+    "exifr": "^7.1.3",
     "pg-boss": "^10.1.5",
     "tsx": "^4.19.2",
     "zod": "^3.23.8"

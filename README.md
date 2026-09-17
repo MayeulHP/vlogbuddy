@@ -314,7 +314,7 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 | `PUBLIC_STORAGE_URL` | — | Public origin of MinIO. Browsers hit this directly. |
 | `CORS_ALLOW_ORIGIN` | `PUBLIC_BASE_URL` | MinIO + Socket.IO allowed Origin. Set `*` for IP / no-domain access. |
 | `SESSION_SECRET` | — | `openssl rand -hex 32`. Signs member cookies and encrypts stored Immich keys. Needed by **both** web and worker, same value. (`setup-env.sh` generates it.) |
-| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / — | Guards `/admin` and creating vlogs. Empty password seals the admin area. (`setup-env.sh` generates the password.) |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / — | Sign-in for `/admin`; also guards creating vlogs. Empty password seals the admin area. Changing the password signs out every browser. (`setup-env.sh` generates the password.) |
 | `MAX_UPLOAD_MB` | `2048` | Per-file upload limit. |
 | `RENDER_HEIGHT` / `RENDER_FPS` | `1080` / `30` | First-boot defaults only — the export format is set on `/admin` after that. |
 | `RENDER_CONCURRENCY` | `1` | Raise only if the host has CPU to spare. |
@@ -325,10 +325,17 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 ## The admin page
 
 Everything a guest touches is open: the share link, the cutting room, the
-finished film. What isn't is `/admin`, behind HTTP Basic Auth
-(`ADMIN_USER` / `ADMIN_PASSWORD`). Serve the instance over HTTPS — Basic
-credentials are base64, not encrypted. Leaving `ADMIN_PASSWORD` empty seals the
-admin area off entirely.
+finished film. What isn't is `/admin`. Visiting it sends you to a sign-in form
+at `/admin/login` that takes `ADMIN_USER` / `ADMIN_PASSWORD` and sets a cookie
+signed with `SESSION_SECRET`, good for a fortnight; changing either secret signs
+every browser out. Serve the instance over HTTPS — the password crosses the wire
+in a form post. Leaving `ADMIN_PASSWORD` empty seals the admin area off
+entirely.
+
+This was HTTP Basic Auth until the app became installable. A navigation served
+through a service worker can't carry an auth challenge to completion, so the
+browser prompted, got nowhere and prompted again — and the prompt was never
+something a password manager could fill anyway.
 
 It does three things:
 

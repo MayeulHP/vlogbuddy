@@ -197,9 +197,108 @@ export function overlapsPrevious(transition: Transition): boolean {
   return XFADE_FOR[transition] !== null;
 }
 
+/**
+ * The same eleven, described in terms a browser can act on.
+ *
+ * The preview has no compositor, so it stacks the outgoing and incoming shots
+ * as two DOM layers and animates them; this map says *what* to animate and the
+ * player works out the CSS. It is deliberately a separate map from `XFADE_FOR`
+ * rather than a richer value in it: no FFmpeg spelling belongs anywhere near a
+ * browser bundle, and the DOM version is an impression of the filter, not a
+ * translation of it.
+ *
+ * `blur` is the honest admission. CSS cannot pixelate — `image-rendering` only
+ * bites when a bitmap is scaled up — so `pixelize` is played as a dissolve that
+ * goes soft in the middle. It hits the same beat (the picture falls apart and
+ * reassembles) and looks nothing like the render, which stays the authority.
+ */
+export type TransitionEffect =
+  | { kind: "none" }
+  | { kind: "dissolve" }
+  | { kind: "dip"; colour: string }
+  | { kind: "wipe"; towards: "left" | "right" }
+  | { kind: "push"; towards: "left" | "right" }
+  | { kind: "iris"; circle: "incoming" | "outgoing" }
+  | { kind: "blur" };
+
+export const TRANSITION_EFFECT: Record<Transition, TransitionEffect> = {
+  cut: { kind: "none" },
+  crossfade: { kind: "dissolve" },
+  dipblack: { kind: "dip", colour: "#000" },
+  dipwhite: { kind: "dip", colour: "#fff" },
+  // The name says where the boundary travels, so the incoming shot arrives
+  // from the far side.
+  wipeleft: { kind: "wipe", towards: "left" },
+  wiperight: { kind: "wipe", towards: "right" },
+  pushleft: { kind: "push", towards: "left" },
+  pushright: { kind: "push", towards: "right" },
+  // Open grows a hole in the incoming shot; close shrinks the outgoing one
+  // away. Which frame carries the circle is the whole difference.
+  irisopen: { kind: "iris", circle: "incoming" },
+  irisclose: { kind: "iris", circle: "outgoing" },
+  pixelize: { kind: "blur" },
+};
+
+/**
+ * How a still moves under the camera.
+ *
+ * Named after the documentarian who made it a house style: a photograph that
+ * drifts reads as film, a photograph that sits there reads as a stall. It is
+ * what buys a still more than a few seconds of screen time.
+ *
+ * A push or a pull, and nothing else. Both scale the frame about its centre,
+ * which is the only move that is safe whatever shape the photo is — a pan
+ * across a portrait letterboxed into 16:9 would travel over the black bars
+ * rather than the picture, and fixing that means the timeline learning to say
+ * "fill the frame", which is a bigger decision than a filter.
+ */
+export const MOTIONS = ["none", "punchin", "pullout"] as const;
+export type Motion = (typeof MOTIONS)[number];
+
+export const MOTION_LABELS: Record<Motion, string> = {
+  none: "Hold still",
+  punchin: "Push in",
+  pullout: "Pull out",
+};
+
+export const MOTION_GLYPHS: Record<Motion, string> = {
+  none: "\u25A1",
+  punchin: "\u25E8",
+  pullout: "\u25E7",
+};
+
+/**
+ * How far a move travels by the last frame. Small on purpose: the shot should
+ * feel alive, not zoom. 12% over four seconds is about a centimetre a second
+ * at arm's length, which is the speed the eye reads as "breathing".
+ */
+export const MOTION_ZOOM = 1.12;
+
+/** Does this move the frame at all? */
+export function movesFrame(motion: Motion): boolean {
+  return motion !== "none";
+}
+
+/**
+ * Speed multipliers offered in the inspector. Free-form would be worse: these
+ * are the ones with a name in the cutting room, and the range is what `atempo`
+ * can chain without the sound turning to mush.
+ */
+export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4] as const;
+export const MIN_SPEED = 0.25;
+export const MAX_SPEED = 4;
+
 /** Photos have no intrinsic duration; this is how long they hold on screen. */
 export const DEFAULT_PHOTO_DURATION = 3;
 export const DEFAULT_TRANSITION_DURATION = 0.5;
+
+/**
+ * The most of a shot a transition into it may consume. `xfade` fails outright
+ * when asked to fade for longer than its inputs last, so the render has always
+ * capped the fade against the incoming clip — this is that cap, named, so the
+ * bench and the preview can reach the same number instead of guessing at it.
+ */
+export const TRANSITION_MAX_SHARE = 0.9;
 
 /**
  * How hard the auto-cut cuts. The only knob the crew gets: everything else
@@ -226,8 +325,19 @@ export const PACE_BLURBS: Record<Pace, string> = {
  * A flag survives on a clip only while nobody has overruled that decision, so
  * re-running the cut never walks over anyone's work.
  */
-export const AUTO_FIELDS = ["timing", "transition", "title", "audio"] as const;
+export const AUTO_FIELDS = ["timing", "transition", "title", "audio", "motion"] as const;
 export type AutoField = (typeof AUTO_FIELDS)[number];
+
+/**
+ * The same bargain for a scene, and there is only one clause in it: the name.
+ *
+ * Where a scene starts and stops is read off the capture times, and nobody is
+ * arguing with the camera about when they took the photograph. What the stretch
+ * of trip is *called* is a different kind of claim — "Tuesday morning" is a
+ * guess made from a timestamp, and the person who was there knows better.
+ */
+export const SCENE_AUTO_FIELDS = ["name"] as const;
+export type SceneAutoField = (typeof SCENE_AUTO_FIELDS)[number];
 
 export const ACCEPTED_IMAGE_TYPES = [
   "image/jpeg",
@@ -271,4 +381,41 @@ export function kindForMimeType(mime: string): MediaKind | "audio" | null {
   if (ACCEPTED_VIDEO_TYPES.includes(mime)) return "video";
   if (ACCEPTED_AUDIO_TYPES.includes(mime)) return "audio";
   return null;
+}
+
+/**
+ * How far the score gets out of the way when a shot has sound of its own.
+ *
+ * This is a *depth*, not a level: the music is pushed down only while somebody
+ * is talking and comes back up in the gaps, which is the whole difference
+ * between a mix and the flat attenuation this replaced.
+ */
+export const DEFAULT_BED_DUCK = 0.6;
+
+/**
+ * The parts of the duck nobody should have to think about, in FFmpeg's units.
+ *
+ * Only the depth is on the timeline. These are the settings that make a duck
+ * sound like a duck rather than a tremolo, and a slider for any of them would
+ * be a slider for a problem the person doesn't have.
+ */
+export const DUCK_SIDECHAIN = {
+  /** Linear, ≈ -30 dBFS: quiet enough that ordinary speech opens it. */
+  threshold: 0.03,
+  /** ms. Fast enough to catch the front of a word, slow enough not to click. */
+  attack: 20,
+  /** ms. Long enough to ride over the pauses between syllables. */
+  release: 350,
+  /** The hardest squeeze the slider can ask for; 1 would be no duck at all. */
+  maxRatio: 12,
+} as const;
+
+/**
+ * Depth (0–1) as a compression ratio. Rounded at the point of generation like
+ * every other number that reaches a filter graph, so two renders of the same
+ * timeline produce byte-identical arguments.
+ */
+export function duckRatio(depth: number): number {
+  const clamped = Math.max(0, Math.min(1, depth));
+  return Math.round((1 + clamped * (DUCK_SIDECHAIN.maxRatio - 1)) * 1000) / 1000;
 }

@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false server.ts",
+    "dev": "tsx watch --clear-screen=false --env-file-if-exists=../../.env server.ts",
     "build": "next build",
-    "start": "NODE_ENV=production tsx server.ts",
+    "start": "NODE_ENV=production tsx --env-file-if-exists=../../.env server.ts",
     "typecheck": "tsc --noEmit",
     "lint": "next lint"
   },

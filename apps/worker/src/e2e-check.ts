@@ -172,8 +172,16 @@ async function main() {
         duration: 2,
         transitionIn: i === 0 ? ("cut" as const) : ("crossfade" as const),
         transitionDuration: 0.5,
+        motion: "none" as const,
+        speed: 1,
+        brightness: 0,
+        contrast: 1,
+        saturation: 1,
+        hue: 0,
+        blur: 0,
         volume: 1,
         muted: false,
+        duckMusic: true,
         titles:
           i === 0
             ? [{
@@ -186,6 +194,7 @@ async function main() {
                 color: "#ffffff",
               }]
             : [],
+        sceneId: null,
         auto: [],
       })),
       // One layer over the second shot, so the whole multi-track path — extra
@@ -210,6 +219,9 @@ async function main() {
         },
       ],
       audio: [],
+      // No scenes: this document is hand-built rather than cut by the director,
+      // so nothing in it belongs to a stretch of trip.
+      scenes: [],
       duckClipAudio: true,
       director: { enabled: true, pace: "standard" as const, sceneText: false, beatSnap: false },
     };

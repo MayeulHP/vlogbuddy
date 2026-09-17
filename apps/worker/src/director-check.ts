@@ -28,6 +28,9 @@ const ok = (pass: boolean, label: string, extra = "") => {
 const T0 = Date.UTC(2026, 5, 13, 9, 30); // Saturday 13 June 2026, 09:30 UTC
 const H = 3600_000;
 
+/** No GPS block, which is the common case and must never break a scene. */
+const UNLOCATED = { latitude: null, longitude: null };
+
 // A weekend: 4 shots over breakfast, 3 in the afternoon, 3 the next morning.
 const offsets = [0, 2, 5, 9, 5*60, 5*60+3, 5*60+11, 26*60, 26*60+4, 26*60+30];
 const cut: CutEntry[] = offsets.map((m, i) => ({
@@ -35,6 +38,7 @@ const cut: CutEntry[] = offsets.map((m, i) => ({
   kind: i % 4 === 3 ? "photo" : "video",
   durationSeconds: i % 4 === 3 ? null : [8, 47, 3.1, 120, 22][i % 5],
   capturedAt: T0 + m * 60_000,
+  ...UNLOCATED,
   rank: [0, 0, 1.2, 2.4, 0.9, 3.8, 0, 1.6, 0, 2.1][i],
 }));
 
@@ -82,6 +86,194 @@ ok(reRun.clips[1].trimStart === edited.clips[1].trimStart, "and its in-point too
 // (e) legacy docs (auto: []) are never touched
 const legacy: TimelineDoc = { ...first, clips: first.clips.map(c => ({ ...c, auto: [] })) };
 ok(runDirector(legacy, input) === legacy, "a pre-auto-cut document is left entirely alone");
+
+// --- scenes, as a stored thing ----------------------------------------------
+// Detection is positional and re-run after every vote; the document's scenes
+// are the durable thing. What has to hold is that a name somebody typed
+// outlives the cut moving underneath it — and that nothing here churns a
+// revision, since the whole pass runs on every single reaction.
+
+console.log("\n   scenes");
+
+ok(first.scenes.length === 4, "the pass stores one scene per break", `${first.scenes.length}`);
+ok(first.scenes.every((s, i) => s.name === (sceneLabel(scenes[i], i) ?? "")),
+   "each is named from when it was shot", first.scenes.map((s) => s.name).join(" / "));
+ok(first.scenes.every((s) => s.auto.includes("name")), "and the names are still the auto-cut's");
+ok(first.clips.every((c) => first.scenes.some((s) => s.id === c.sceneId)),
+   "every shot points at a scene that exists");
+const sceneStarts = first.scenes.map((s) => first.clips.findIndex((c) => c.sceneId === s.id));
+ok(sceneStarts.join() === "0,4,7,9", "the scenes open where the breaks are", sceneStarts.join(","));
+ok(first.scenes.every((s) => s.id !== first.scenes[0].id || s === first.scenes[0]),
+   "the ids are distinct");
+
+// A rename, and the promise that outlives everything else here.
+const RENAMED = "Breakfast, eventually";
+const renamed = applyTimelineOp(first, {
+  type: "scene.rename", sceneId: first.scenes[1].id, name: RENAMED,
+});
+ok(renamed.scenes[1].name === RENAMED, "renaming a scene takes");
+ok(renamed.scenes[1].auto.length === 0, "...and takes the name off the auto-cut");
+ok(renamed.scenes[0].name === first.scenes[0].name, "...and leaves the other scenes alone");
+
+const afterRename = runDirector(renamed, input);
+ok(afterRename.scenes[1].name === RENAMED, "the director doesn't put the date back");
+ok(runDirector(afterRename, input) === afterRename, "...and settles in one pass");
+ok(afterRename.clips[4].titles[0]?.text === RENAMED,
+   "the name burnt over the scene follows the rename",
+   afterRename.clips[4].titles[0]?.text ?? "no title");
+const renameTrip = JSON.parse(JSON.stringify(afterRename)) as TimelineDoc;
+ok(runDirector(renameTrip, input) === renameTrip, "...and survives a jsonb round-trip settled");
+
+// A shot leaving the cut from inside a renamed scene. The rest of its footage
+// is still there, so it is still the same scene.
+const shorter = cut.filter((_, i) => i !== 4);
+const shorterDoc = runDirector(reconcileClips(afterRename, shorter), { ...input, cut: shorter });
+ok(shorterDoc.scenes.find((s) => s.id === first.scenes[1].id)?.name === RENAMED,
+   "a rename survives a shot dropping out of the scene");
+
+// ...and the running order being rearranged. Nothing here compares positions.
+const shuffled: CutEntry[] = [cut[9], ...cut.slice(0, 9)];
+const movedDoc = runDirector(reconcileClips(afterRename, shuffled), { ...input, cut: shuffled });
+ok(movedDoc.scenes.find((s) => s.id === first.scenes[1].id)?.name === RENAMED,
+   "and survives the cut being reordered around it");
+
+// "Start again" is the only thing that takes a name back.
+const rearmed = runDirector(applyTimelineOp(afterRename, { type: "director.recut" }), input);
+ok(rearmed.scenes[1].name === first.scenes[1].name, "a re-cut puts the date back",
+   rearmed.scenes[1].name);
+ok(rearmed.scenes[1].auto.includes("name"), "...and hands the name back to the auto-cut");
+ok(rearmed.scenes[1].id === first.scenes[1].id, "...without it becoming a different scene");
+
+// A document from before any of this: no flags, no scenes, and no opinions
+// about either. Deriving scenes for it would be the auto-cut letting itself
+// back into a film that told it to stay out.
+const preScenes: TimelineDoc = {
+  ...first,
+  clips: first.clips.map((c) => ({ ...c, auto: [], sceneId: null })),
+  scenes: [],
+};
+ok(runDirector(preScenes, input) === preScenes, "a hand-cut film is given no scenes at all");
+
+// A scene splitting: the name stays with the footage it was mostly about.
+const trio: CutEntry[] = [0, 40, 45].map((m, i) => ({
+  mediaItemId: `00000000-0000-4000-a000-${String(i).padStart(12, "0")}`,
+  kind: "photo" as const,
+  durationSeconds: null,
+  capturedAt: T0 + m * 60_000,
+  ...UNLOCATED,
+  rank: 1,
+}));
+const together: CutEntry[] = trio.map((e, i) => ({ ...e, capturedAt: T0 + i * 5 * 60_000 }));
+const oneScene = runDirector(reconcileClips(emptyTimeline(), together), { ...input, cut: together });
+ok(oneScene.scenes.length === 1, "three shots in one sitting are one scene");
+const namedTrio = applyTimelineOp(oneScene, {
+  type: "scene.rename", sceneId: oneScene.scenes[0].id, name: "The hut",
+});
+const split = runDirector(reconcileClips(namedTrio, trio), { ...input, cut: trio });
+ok(split.scenes.length === 2, "a gap opening up inside it splits it in two", `${split.scenes.length}`);
+ok(split.scenes[1].name === "The hut", "the half with most of the footage keeps the name",
+   split.scenes.map((s) => s.name || "—").join(" / "));
+ok(split.scenes[0].id !== split.scenes[1].id, "the other half is a different scene");
+ok(split.scenes[0].auto.includes("name"), "...and is the auto-cut's to name");
+ok(runDirector(split, { ...input, cut: trio }) === split, "and the split settles in one pass");
+
+// --- scenes by place --------------------------------------------------------
+// The other half of a scene break. Distance is measured against an anchor —
+// the first located shot of the scene in progress — and both the breaking and
+// the *not* breaking below would come out wrong if it were measured against
+// the previous shot instead.
+
+console.log("\n   places");
+
+/** Somewhere to be. Only the offsets matter; the origin is arbitrary. */
+const ORIGIN = { latitude: 48.8584, longitude: 2.2945 };
+/** A fix `metres` due north of the origin. A degree of latitude is 111.2km. */
+const north = (metres: number) => ({
+  latitude: ORIGIN.latitude + metres / 111_195,
+  longitude: ORIGIN.longitude,
+});
+
+type Fix = { latitude: number; longitude: number } | null;
+/** A cut a minute apart, so nothing here can break on time. */
+const placed = (fixes: Fix[], tag = "b"): CutEntry[] =>
+  fixes.map((fix, i) => ({
+    mediaItemId: `00000000-0000-4000-${tag}000-${String(i).padStart(12, "0")}`,
+    kind: "photo" as const,
+    durationSeconds: null,
+    capturedAt: T0 + i * 60_000,
+    latitude: fix?.latitude ?? null,
+    longitude: fix?.longitude ?? null,
+    rank: 1,
+  }));
+
+const breaksOf = (fixes: Fix[], tag = "b") =>
+  detectScenes(placed(fixes, tag)).map((s) => s.startIndex);
+
+// The crew gets in the car.
+const relocated = breaksOf([north(0), north(40), north(90), north(3000), north(3060)]);
+ok(relocated.join() === "0,3", "moving three kilometres starts a new scene", relocated.join(","));
+
+// ...and the move reads as a dissolve, not the end of a day.
+const movedCut = placed([north(0), north(40), north(90), north(3000), north(3060)]);
+const movedDoc2 = runDirector(reconcileClips(emptyTimeline(), movedCut), { ...input, cut: movedCut });
+ok(movedDoc2.scenes.length === 2, "the document gets both scenes", `${movedDoc2.scenes.length}`);
+ok(movedDoc2.clips[3].transitionIn === "crossfade",
+   "a change of place dissolves rather than dipping to black", movedDoc2.clips[3].transitionIn);
+ok(runDirector(movedDoc2, { ...input, cut: movedCut }) === movedDoc2,
+   "and a place-driven split settles in one pass");
+
+// Wandering about one place. Four hundred metres apart at the extremes, which
+// is a big park, and nothing about that is a second scene.
+ok(breaksOf([north(0), north(150), north(380), north(60), north(410)]).join() === "0",
+   "moving about inside one place stays one scene");
+
+// GPS drift, which is tens of metres on a phone that hasn't moved at all.
+ok(breaksOf([north(0), north(35), north(-20), north(48), north(-12)]).join() === "0",
+   "a stationary phone's jitter never breaks a scene");
+
+// The common case: no GPS block at all.
+ok(breaksOf([null, null, null, null]).join() === "0", "a pile with no fixes at all is one scene");
+ok(breaksOf([north(0), null, north(80), null, north(160)]).join() === "0",
+   "shots with no fix don't break the scene they sit in");
+// The anchor is carried across them rather than reset, so the shot that *does*
+// know where it is is still compared with where the scene started.
+ok(breaksOf([north(0), null, null, north(4000)]).join() === "0,3",
+   "...and the anchor survives them to catch the shot that did move");
+// A camera that never got a lock writes the middle of the Atlantic.
+ok(breaksOf([north(0), { latitude: 0, longitude: 0 }, north(90)]).join() === "0",
+   "a null-island fix is read as no fix");
+
+// The case that decides the whole design: a long walk, eighty metres at a
+// time. Compared shot to shot no step is ever close to the threshold, so a
+// neighbour rule would never break at all; compared against a *moving* anchor
+// it would break on every step past the first one. Against the scene's own
+// anchor it breaks once per five hundred metres covered.
+const walk = Array.from({ length: 24 }, (_, i) => north(i * 80));
+const walkBreaks = breaksOf(walk, "c");
+ok(walkBreaks.join() === "0,7,14,21", "a walk across a wide area breaks once per 500m",
+   walkBreaks.join(","));
+ok(walkBreaks.length <= 5, "...rather than fragmenting into a scene per shot",
+   `${walkBreaks.length} scenes for ${walk.length} shots`);
+
+// A rename outliving a place-driven split, the same way it outlives a gap.
+const oneStop = placed([north(0), north(60), north(140), north(200), north(90)], "d");
+const stopDoc = runDirector(reconcileClips(emptyTimeline(), oneStop), { ...input, cut: oneStop });
+ok(stopDoc.scenes.length === 1, "five shots around one spot are one scene");
+const namedStop = applyTimelineOp(stopDoc, {
+  type: "scene.rename", sceneId: stopDoc.scenes[0].id, name: "The lake",
+});
+// The last two turn out to have been taken five kilometres up the road.
+const twoStops = oneStop.map((e, i) => (i >= 3 ? { ...e, ...north(5000) } : e));
+const stopSplit = runDirector(reconcileClips(namedStop, twoStops), { ...input, cut: twoStops });
+ok(stopSplit.scenes.length === 2, "a place break splits it in two", `${stopSplit.scenes.length}`);
+ok(stopSplit.scenes[0].name === "The lake", "the half with most of the footage keeps the name",
+   stopSplit.scenes.map((s) => s.name || "—").join(" / "));
+ok(stopSplit.scenes[1].auto.includes("name"), "the new half is the auto-cut's to name");
+ok(runDirector(stopSplit, { ...input, cut: twoStops }) === stopSplit,
+   "and that split settles in one pass too");
+const stopTrip = JSON.parse(JSON.stringify(stopSplit)) as TimelineDoc;
+ok(runDirector(stopTrip, { ...input, cut: twoStops }) === stopTrip,
+   "...and survives a jsonb round-trip settled");
 
 // --- what it actually produced ---------------------------------------------
 const durations = Object.fromEntries(cut.map(e => [e.mediaItemId, e.durationSeconds]));
@@ -182,7 +374,7 @@ const snappedAgain = runDirector(snapped, beatInput);
 ok(snappedAgain === snapped, "running twice with beats returns the IDENTICAL object");
 /** Same film, ignoring the timestamp and the object identity. */
 const sameCut = (a: TimelineDoc, b: TimelineDoc) =>
-  JSON.stringify(a.clips) === JSON.stringify(b.clips);
+  JSON.stringify([a.clips, a.scenes]) === JSON.stringify([b.clips, b.scenes]);
 ok(sameCut(runDirector(doc, beatInput), snapped), "a second run from scratch produces the same film");
 // Every generated number must survive the trip through jsonb unchanged, or the
 // comparison above would flip on the *next* sync instead of this one.
@@ -229,6 +421,103 @@ console.log(
     "\n   without:    " +
     plain.clips.map((c) => clipDuration(c, durations[c.mediaItemId]).toFixed(2)).join("  "),
 );
+
+// --- the move on stills -----------------------------------------------------
+// The auto-cut gives every photograph a slow push or pull, and that move is
+// what pays for the extra screen time — so the two have to be checked
+// together. A still told to hold still has to give the time back.
+
+const photoCut: CutEntry[] = Array.from({ length: 8 }, (_, i) => ({
+  mediaItemId: `00000000-0000-4000-9000-${String(i).padStart(12, "0")}`,
+  kind: "photo" as const,
+  durationSeconds: null,
+  capturedAt: T0 + i * 60_000,
+  ...UNLOCATED,
+  rank: 4, // hero, against a threshold of 0
+}));
+const photoInput = {
+  cut: photoCut,
+  threshold: 0,
+  settings: { enabled: true, pace: "relaxed" as const, sceneText: false, beatSnap: false },
+};
+const stills = runDirector(reconcileClips(emptyTimeline(), photoCut), photoInput);
+
+console.log("\n   stills");
+ok(stills.clips.every((c) => c.motion !== "none"), "every still is given a move");
+ok(
+  new Set(stills.clips.map((c) => c.motion)).size > 1,
+  "a run of stills doesn't all move the same way",
+  stills.clips.map((c) => c.motion).join(" "),
+);
+ok(first.clips.every((c) => c.kind === "video" ? c.motion === "none" : true),
+   "footage is left alone — the move is for photographs");
+const longest = Math.max(...stills.clips.map((c) => c.duration));
+ok(longest > 4, "a moving still can hold past the four-second cap", `${longest.toFixed(2)}s`);
+ok(runDirector(stills, photoInput) === stills, "and the pass is still idempotent");
+
+// Reordering restages nothing: the move comes from the item's own id.
+const reversed = [...photoCut].reverse();
+const reversedDoc = runDirector(
+  reconcileClips(emptyTimeline(), reversed),
+  { ...photoInput, cut: reversed },
+);
+const motionById = new Map(stills.clips.map((c) => [c.mediaItemId, c.motion]));
+ok(
+  reversedDoc.clips.every((c) => motionById.get(c.mediaItemId) === c.motion),
+  "reordering the cut doesn't restage the photographs",
+);
+
+// Hand-picking "hold still" is a person overruling the director, and the
+// shorter budget follows from it without anyone asking.
+const held = applyTimelineOp(stills, {
+  type: "clip.update",
+  clipId: stills.clips[0].id,
+  patch: { motion: "none" },
+});
+ok(held.clips[0].auto.includes("motion") === false, "choosing a move by hand drops the motion flag");
+ok(held.clips[0].auto.includes("timing") === true, "...and leaves the timing to the auto-cut");
+const backToStill = runDirector(held, photoInput);
+ok(backToStill.clips[0].motion === "none", "the director doesn't put the move back");
+ok(backToStill.clips[0].duration <= 4, "a still told to hold still goes back to the still budget",
+   `${backToStill.clips[0].duration.toFixed(2)}s`);
+ok(runDirector(backToStill, photoInput) === backToStill, "...and settles there");
+
+// A document written before the move existed has no motion flag, so it stays
+// exactly as it was — same contract as every other auto field.
+const preMotion: TimelineDoc = {
+  ...stills,
+  clips: stills.clips.map((c) => ({ ...c, motion: "none" as const, auto: c.auto.filter((f) => f !== "motion") })),
+};
+ok(runDirector(preMotion, photoInput).clips.every((c) => c.motion === "none"),
+   "a document from before the move is left still");
+
+// --- speed ------------------------------------------------------------------
+// Speed divides the time on screen, and the budget is paid in screen seconds.
+
+console.log("\n   speed");
+const SP = 1; // a video shot with 47s of source behind it
+const plainLen = clipDuration(first.clips[SP], durations[first.clips[SP].mediaItemId]);
+const fast = applyTimelineOp(first, {
+  type: "clip.update",
+  clipId: first.clips[SP].id,
+  patch: { speed: 2 },
+});
+ok(fast.clips[SP].auto.includes("timing") === false,
+   "retiming a shot takes the timing decision off the auto-cut");
+const fastLen = clipDuration(fast.clips[SP], durations[fast.clips[SP].mediaItemId]);
+ok(Math.abs(fastLen - plainLen / 2) < 0.002, "double speed halves the time on screen",
+   `${plainLen.toFixed(2)}s → ${fastLen.toFixed(2)}s`);
+ok(runDirector(fast, input) === fast, "and the director writes nothing in response");
+
+// After a re-cut the director owns the timing again — but the shot is still
+// running at 2×, so it has to take twice as much footage to fill the same
+// slot. Budgeting in source seconds here would halve the shot.
+const recut = runDirector(applyTimelineOp(fast, { type: "director.recut" }), input);
+const recutLen = clipDuration(recut.clips[SP], durations[recut.clips[SP].mediaItemId]);
+ok(Math.abs(recutLen - plainLen) < 0.05,
+   "a re-cut budgets a retimed shot in screen seconds, not source seconds",
+   `${recutLen.toFixed(2)}s vs ${plainLen.toFixed(2)}s`);
+ok(recut.clips[SP].speed === 2, "...and the re-cut leaves the speed itself alone");
 
 console.log(failed === 0 ? "\nall checks passed" : `\n${failed} CHECK(S) FAILED`);
 process.exit(failed === 0 ? 0 : 1);

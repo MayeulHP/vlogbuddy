@@ -1,12 +1,19 @@
 import { z } from "zod";
 import {
   AUTO_FIELDS,
+  DEFAULT_BED_DUCK,
   DEFAULT_PHOTO_DURATION,
   DEFAULT_TRANSITION_DURATION,
+  MAX_SPEED,
+  MIN_SPEED,
+  MOTIONS,
   PACE_PRESETS,
+  SCENE_AUTO_FIELDS,
+  TRANSITION_MAX_SHARE,
   TRANSITIONS,
   overlapsPrevious,
   type AutoField,
+  type SceneAutoField,
 } from "./constants";
 
 /**
@@ -22,6 +29,9 @@ import {
  *   - `audio` — a stack of audio tracks mixed under the whole thing, each with
  *     its own in-point, level and fades. One of them is the `bed` the cut
  *     engine keeps in step with the soundtrack lane; the rest are hand-placed.
+ *   - `scenes` — the stretches of trip the base track breaks into. Derived from
+ *     the capture times, but *stored*, because the name of one is a person's to
+ *     change and a derived name would forget it on the next vote.
  *
  * The base track sets the running time. Layers and audio are clipped to it —
  * nothing hanging off the end of the picture can make the film longer.
@@ -33,6 +43,7 @@ import {
  */
 
 export const transitionSchema = z.enum(TRANSITIONS);
+export const motionSchema = z.enum(MOTIONS);
 
 export const titleOverlaySchema = z.object({
   id: z.string(),
@@ -71,6 +82,40 @@ export const directorSettingsSchema = z.object({
 });
 export type DirectorSettings = z.infer<typeof directorSettingsSchema>;
 
+export const sceneAutoFieldSchema = z.enum(SCENE_AUTO_FIELDS);
+
+/**
+ * A stretch of the trip shot in one sitting: the run of shots between two long
+ * gaps in the capture times, and the thing the dissolve in the finished cut is
+ * announcing the end of.
+ *
+ * Stored rather than worked out afresh on every read, because the name is only
+ * a first guess. The auto-cut proposes "Tuesday morning" off a timestamp;
+ * somebody who was there calls it "the walk up to the hut", and that has to
+ * outlive every vote cast afterwards.
+ *
+ * Which shots are in it stays derived — that's the camera's word rather than
+ * anyone's opinion — so the name is the only thing here a person owns.
+ */
+export const sceneSchema = z.object({
+  id: z.string(),
+  /** Empty when nothing in the scene knows when it was taken. */
+  name: z.string().max(80).default(""),
+  /** Epoch ms of the first shot in it with a capture time; where the guess came from. */
+  startedAt: z.number().nullable().default(null),
+  /** True when this scene opens a day the one before it didn't. */
+  newDay: z.boolean().default(false),
+  /** Decisions still owned by the auto-cut. See `SCENE_AUTO_FIELDS`. */
+  auto: z.array(sceneAutoFieldSchema).default([]),
+});
+export type Scene = z.infer<typeof sceneSchema>;
+
+/** Drops the flag a rename has just overruled. Same object if it was already off. */
+export function clearSceneAutoFor(scene: Scene, field: SceneAutoField): Scene {
+  if (!scene.auto.includes(field)) return scene;
+  return { ...scene, auto: scene.auto.filter((f) => f !== field) };
+}
+
 export const clipSchema = z.object({
   id: z.string(),
   mediaItemId: z.string().uuid(),
@@ -83,10 +128,52 @@ export const clipSchema = z.object({
   /** Transition *into* this clip from the previous one. */
   transitionIn: transitionSchema.default("cut"),
   transitionDuration: z.number().min(0).max(5).default(DEFAULT_TRANSITION_DURATION),
+  /**
+   * Photos only: the slow push or pull that keeps a still alive. Videos carry
+   * their own movement, so the field is ignored for them rather than forbidden
+   * — a photo swapped for a video shouldn't fail to parse.
+   */
+  motion: motionSchema.default("none"),
+  /**
+   * Videos only. 1 is real time, 2 is double speed, 0.5 is half. It divides
+   * the clip's on-screen length, which is why `clipDuration` is the single
+   * place it's applied — every timing helper in the app derives from that one
+   * function, and a second opinion about it would desynchronise the lot.
+   */
+  speed: z.number().min(MIN_SPEED).max(MAX_SPEED).default(1),
+  /**
+   * The grade. Neutral by default, and every value is compared against its
+   * neutral before a filter is emitted, so an untouched clip compiles to
+   * exactly the chain it compiled to before any of this existed.
+   */
+  brightness: z.number().min(-1).max(1).default(0),
+  contrast: z.number().min(0).max(3).default(1),
+  saturation: z.number().min(0).max(3).default(1),
+  hue: z.number().min(-180).max(180).default(0),
+  blur: z.number().min(0).max(20).default(0),
   /** Original-clip audio level, 0 = mute. Music bed usually wins. */
   volume: z.number().min(0).max(2).default(1),
   muted: z.boolean().default(false),
+  /**
+   * Does this shot push the score down while it plays? On by default, because
+   * the usual reason a shot has sound is that somebody is talking. The way out
+   * is for the shots where that isn't true — wind, traffic, a crowd — which
+   * would otherwise hold the music flat for their whole length.
+   *
+   * A silent or muted shot ducks nothing whatever this says: the duck is keyed
+   * off the audio itself, so there's nothing to open it.
+   */
+  duckMusic: z.boolean().default(true),
   titles: z.array(titleOverlaySchema).default([]),
+  /**
+   * Which scene this shot is part of (`TimelineDoc.scenes`).
+   *
+   * An id rather than the scene carrying a range of positions: a range means
+   * the wrong thing the instant anybody drags a shot somewhere else, and
+   * reconciling the cut already works by following media from one running
+   * order to the next. Null on a shot the auto-cut has never had a say over.
+   */
+  sceneId: z.string().nullable().default(null),
   /** Decisions still owned by the auto-cut. See `autoFieldSchema`. */
   auto: z.array(autoFieldSchema).default([]),
 });
@@ -105,9 +192,29 @@ export const AUTO_FIELD_FOR: Record<keyof Omit<Clip, "id" | "auto">, AutoField |
   duration: "timing",
   transitionIn: "transition",
   transitionDuration: "transition",
+  motion: "motion",
+  // The auto-cut never sets a speed, but retiming a shot by hand is a timing
+  // decision in every sense that matters: if it kept re-trimming afterwards
+  // it would be fighting the person who slowed the shot down.
+  speed: "timing",
+  brightness: null,
+  contrast: null,
+  saturation: null,
+  hue: null,
+  blur: null,
   volume: "audio",
   muted: "audio",
+  // Deliberately nobody's: the auto-cut has no opinion about the score, and
+  // filing it under "audio" would mean that saying "let the music ride over
+  // this one" also froze the director's decision about whether the shot is
+  // heard at all — two unrelated questions, one flag.
+  duckMusic: null,
   titles: "title",
+  // Nobody's, because there is no hand edit for it to lose to: scene breaks
+  // come off the capture times, and `clip.update` doesn't carry the field at
+  // all. The auto-cut writes it as bookkeeping whenever it still has any say
+  // over the shot, and a shot handed back entirely keeps the scene it was in.
+  sceneId: null,
 };
 
 /** Drops the flags a patch has just overruled. Same object if none applied. */
@@ -178,6 +285,17 @@ export const audioTrackSchema = z.object({
   /** How long it plays for; null runs it to the end of the picture. */
   duration: z.number().positive().nullable().default(null),
   volume: z.number().min(0).max(2).default(0.8),
+  /**
+   * How far this track drops while the shots have sound of their own — 0 leaves
+   * it sitting where the level says, 1 buries it under a voice.
+   *
+   * It lives on the track being ducked rather than on each shot because that's
+   * the thing the depth is a property of: one dial for "how much does my music
+   * get out of the way", not a dial per shot that only means anything relative
+   * to the bed's level. Shots opt *out* (`Clip.duckMusic`); they don't each
+   * carry their own amount.
+   */
+  duck: z.number().min(0).max(1).default(DEFAULT_BED_DUCK),
   fadeIn: z.number().min(0).default(1),
   fadeOut: z.number().min(0).default(2),
   muted: z.boolean().default(false),
@@ -192,7 +310,22 @@ export const timelineDocSchema = z.object({
   clips: z.array(clipSchema).default([]),
   layers: z.array(layerClipSchema).default([]),
   audio: z.array(audioTrackSchema).default([]),
-  /** Ducks original clip audio while any music track plays. */
+  /**
+   * The stretches of trip the base track breaks into, in running order. The
+   * auto-cut owns the list — it detects the breaks and reconciles them against
+   * what's here — and a person owns the names.
+   */
+  scenes: z.array(sceneSchema).default([]),
+  /**
+   * The master switch for ducking: off, and the music sits at its own level
+   * whatever the shots are doing. How *far* it ducks is per-track
+   * (`AudioTrack.duck`), and which shots push it down is per-clip
+   * (`Clip.duckMusic`).
+   *
+   * The name is a fossil — it used to attenuate the shots rather than the
+   * score — and it keeps it because it's a key in stored jsonb: renaming means
+   * a shim in `normalizeTimeline` for a word nobody sees.
+   */
   duckClipAudio: z.boolean().default(true),
   /** How the auto-cut paces the base track. */
   director: directorSettingsSchema.default({}),
@@ -211,14 +344,30 @@ export function emptyTimeline(): TimelineDoc {
  * have no ids — the schema's defaults fill both in. Every read of
  * `timelines.doc` goes through here, because the column is typed but not
  * validated and the rest of the code assumes the arrays exist.
+ *
+ * Documents written before scenes come back with none, and this deliberately
+ * doesn't invent them: the breaks are read off capture times, which aren't in
+ * the document. The cut engine fills them in on the next sync — and for a film
+ * whose every shot has been cut by hand it never will, which is the right
+ * answer. A document that took the auto-cut's flags away is not asking for a
+ * fresh opinion about where its days begin.
  */
 export function normalizeTimeline(doc: unknown): TimelineDoc {
   const parsed = timelineDocSchema.parse(doc);
   return parsed.version === 2 ? parsed : { ...parsed, version: 2 };
 }
 
-/** Effective on-screen duration of a clip, accounting for trims. */
-export function clipDuration(clip: Clip, sourceDuration?: number | null): number {
+/** A clip's speed, which only ever means anything for video. */
+export function clipSpeed(clip: Clip): number {
+  return clip.kind === "photo" ? 1 : clip.speed;
+}
+
+/**
+ * How many seconds of the *source* a clip consumes — its length before speed
+ * is applied. This is what the trim window measures and what FFmpeg has to be
+ * told to read; `clipDuration` is what the audience experiences.
+ */
+export function clipSourceSpan(clip: Clip, sourceDuration?: number | null): number {
   if (clip.kind === "photo") return clip.duration;
   const end = clip.trimEnd ?? sourceDuration ?? null;
   if (end === null) return clip.duration;
@@ -226,9 +375,57 @@ export function clipDuration(clip: Clip, sourceDuration?: number | null): number
 }
 
 /**
+ * Effective on-screen duration of a clip, accounting for trims and speed.
+ *
+ * The one place speed is divided out. Rounded to 3dp, and only when a speed is
+ * actually set, so that a clip nobody has retimed returns the identical number
+ * it always did — the auto-cut compares documents by value to decide whether
+ * to write, and a float that won't round-trip through jsonb would churn a
+ * revision on every vote forever.
+ */
+export function clipDuration(clip: Clip, sourceDuration?: number | null): number {
+  const span = clipSourceSpan(clip, sourceDuration);
+  const speed = clipSpeed(clip);
+  if (speed === 1) return span;
+  return Math.max(0.05, Math.round((span / speed) * 1000) / 1000);
+}
+
+/** Does this clip ask for anything the plain normalise chain doesn't do? */
+export function isGraded(clip: Clip): boolean {
+  return (
+    clip.brightness !== 0 ||
+    clip.contrast !== 1 ||
+    clip.saturation !== 1 ||
+    clip.hue !== 0 ||
+    clip.blur > 0
+  );
+}
+
+/**
+ * How far a clip's transition pulls it back over the one before it.
+ *
+ * The single opinion on the subject. `transitionDuration` is what the clip
+ * *asks* for; this is what it actually gets, because a fade can be no longer
+ * than the shot it fades into (`TRANSITION_MAX_SHARE`) nor than the film that
+ * exists in front of it. The renderer, the bench and the preview all ask here
+ * — they used to clamp separately and disagreed about the running time of any
+ * shot briefer than its own dissolve.
+ *
+ * `available` is how much timeline precedes this clip; the first one has none
+ * and so overlaps nothing.
+ */
+export function transitionOverlap(clip: Clip, clipLength: number, available: number): number {
+  if (!overlapsPrevious(clip.transitionIn)) return 0;
+  return Math.max(
+    0,
+    Math.min(clip.transitionDuration, clipLength * TRANSITION_MAX_SHARE, available),
+  );
+}
+
+/**
  * Total video length — the base track's, since layers and audio are clipped to
- * the picture. Crossfades overlap, so each one shortens the result by its own
- * duration.
+ * the picture. Crossfades overlap, so each one shortens the result by however
+ * much of it `transitionOverlap` allows.
  */
 export function timelineDuration(
   timeline: TimelineDoc,
@@ -236,10 +433,9 @@ export function timelineDuration(
 ): number {
   let total = 0;
   timeline.clips.forEach((clip, index) => {
-    total += clipDuration(clip, durations[clip.mediaItemId]);
-    if (index > 0 && overlapsPrevious(clip.transitionIn)) {
-      total -= Math.min(clip.transitionDuration, total);
-    }
+    const length = clipDuration(clip, durations[clip.mediaItemId]);
+    if (index > 0) total -= transitionOverlap(clip, length, total);
+    total += length;
   });
   return Math.max(0, total);
 }
@@ -252,11 +448,10 @@ export function clipStartTimes(
   const starts: Record<string, number> = {};
   let cursor = 0;
   timeline.clips.forEach((clip, index) => {
-    if (index > 0 && overlapsPrevious(clip.transitionIn)) {
-      cursor -= Math.min(clip.transitionDuration, cursor);
-    }
+    const length = clipDuration(clip, durations[clip.mediaItemId]);
+    if (index > 0) cursor -= transitionOverlap(clip, length, cursor);
     starts[clip.id] = cursor;
-    cursor += clipDuration(clip, durations[clip.mediaItemId]);
+    cursor += length;
   });
   return starts;
 }
@@ -341,16 +536,33 @@ export function pruneTimelineReferences(
  * The cut, as decided on the Gather page: which media are in, and in what
  * order. Reconciling turns that list into clips without throwing away work —
  * a clip that survives keeps its trims, titles, volume and transition.
+ *
+ * Built in `syncCut` from the media rows and read by the auto-cut, and it goes
+ * nowhere else: no component renders one, no server action returns one and no
+ * socket payload carries one. That's what makes it safe to put the columns
+ * below on it.
  */
 export interface CutEntry {
   mediaItemId: string;
   kind: "photo" | "video";
   durationSeconds: number | null;
   /**
-   * Capture time as epoch milliseconds. Not a `Date`: this crosses into the
-   * browser bundle and has to survive a JSON round-trip unchanged.
+   * Capture time as epoch milliseconds rather than a `Date`, because the
+   * auto-cut subtracts and compares these and two `Date`s for one instant are
+   * never equal.
    */
   capturedAt: number | null;
+  /**
+   * Where it was taken, decimal degrees, WGS 84 — null for the very common
+   * case of a file with no GPS block. The auto-cut breaks a scene when these
+   * say the crew has moved on.
+   *
+   * **These must not reach a browser.** `MediaItemView` drops the same two
+   * columns off the row it serialises into the page for every member; this
+   * type is the server-side path that still needs them, and it stays one.
+   */
+  latitude: number | null;
+  longitude: number | null;
   /** The crew's `rankScore` for this item — what the auto-cut budgets from. */
   rank: number;
 }
@@ -366,9 +578,19 @@ export function defaultClipFor(entry: CutEntry): Clip {
     duration: isVideo ? entry.durationSeconds ?? 5 : DEFAULT_PHOTO_DURATION,
     transitionIn: "cut",
     transitionDuration: DEFAULT_TRANSITION_DURATION,
+    motion: "none",
+    speed: 1,
+    brightness: 0,
+    contrast: 1,
+    saturation: 1,
+    hue: 0,
+    blur: 0,
     volume: 1,
     muted: false,
+    duckMusic: true,
     titles: [],
+    // Filled in by the auto-cut's scene pass, which runs right after this.
+    sceneId: null,
     // A clip arriving from the vote is entirely the auto-cut's to shape, until
     // somebody on the bench says otherwise.
     auto: [...AUTO_FIELDS],
@@ -407,7 +629,10 @@ export const timelineOpSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("clip.add"), clip: clipSchema, index: z.number().int().min(0).optional() }),
   z.object({ type: z.literal("clip.remove"), clipId: z.string() }),
   z.object({ type: z.literal("clip.move"), clipId: z.string(), toIndex: z.number().int().min(0) }),
-  z.object({ type: z.literal("clip.update"), clipId: z.string(), patch: clipSchema.partial().omit({ id: true }) }),
+  // `sceneId` is off the patch on purpose: it isn't an editorial decision, it's
+  // where the auto-cut filed the shot, and the only thing a person changes
+  // about a scene is what it's called.
+  z.object({ type: z.literal("clip.update"), clipId: z.string(), patch: clipSchema.partial().omit({ id: true, sceneId: true }) }),
   z.object({ type: z.literal("title.add"), clipId: z.string(), title: titleOverlaySchema }),
   z.object({ type: z.literal("title.remove"), clipId: z.string(), titleId: z.string() }),
   z.object({
@@ -438,6 +663,21 @@ export const timelineOpSchema = z.discriminatedUnion("type", [
     }),
   }),
   /**
+   * Rename a scene.
+   *
+   * Its own op rather than a generic `scene.update` carrying a partial patch —
+   * which is how per-clip fields ride `clip.update` — because a scene has
+   * exactly one field a person owns. Everything else on it (where it starts,
+   * whether it opens a new day, whether the auto-cut still names it) is the
+   * director's bookkeeping, and a patch op would hand a client the `auto` array
+   * that this very op exists to clear.
+   */
+  z.object({
+    type: z.literal("scene.rename"),
+    sceneId: z.string(),
+    name: z.string().trim().min(1).max(80),
+  }),
+  /**
    * Hand every clip back to the auto-cut. Destructive of hand work by design —
    * it's the "start again" button — which is also why it's an op rather than a
    * document write: it converges to every open browser like any other edit.
@@ -453,6 +693,7 @@ export function applyTimelineOp(doc: TimelineDoc, op: TimelineOp): TimelineDoc {
     clips: doc.clips.map((c) => ({ ...c, titles: [...c.titles] })),
     layers: [...doc.layers],
     audio: [...doc.audio],
+    scenes: [...doc.scenes],
   };
 
   switch (op.type) {
@@ -540,8 +781,17 @@ export function applyTimelineOp(doc: TimelineDoc, op: TimelineOp): TimelineDoc {
       if (op.patch.director) next.director = { ...next.director, ...op.patch.director };
       break;
     }
+    case "scene.rename": {
+      next.scenes = next.scenes.map((s) =>
+        s.id === op.sceneId ? clearSceneAutoFor({ ...s, name: op.name }, "name") : s,
+      );
+      break;
+    }
     case "director.recut": {
       next.clips = next.clips.map((c) => ({ ...c, auto: [...AUTO_FIELDS] }));
+      // Scene names go back in the pot with everything else — this is the only
+      // way a name somebody typed is ever taken off the document.
+      next.scenes = next.scenes.map((s) => ({ ...s, auto: [...SCENE_AUTO_FIELDS] }));
       break;
     }
   }

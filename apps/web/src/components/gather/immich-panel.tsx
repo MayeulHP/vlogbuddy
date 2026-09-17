@@ -162,11 +162,11 @@ export function ImmichPanel({
               title={
                 mediaCount === 0
                   ? "Nothing in the pile yet"
-                  : "Copy every original in this vlog into your own Immich"
+                  : "Copy the finished film, and every original in this vlog — everyone's, not just yours — into your own Immich"
               }
             >
-              <span className="sm:hidden">↑ Copy the roll out</span>
-              <span className="hidden sm:inline">↑ Copy roll to my Immich</span>
+              <span className="sm:hidden">↑ Copy all to my Immich</span>
+              <span className="hidden sm:inline">↑ Copy everything to my Immich</span>
             </button>
             <button
               onClick={disconnect}
@@ -286,7 +286,7 @@ function TransferBar({
   const heading = finished
     ? transfer.direction === "import"
       ? "Imported"
-      : "Copied out"
+      : "Copied to Immich"
     : transfer.direction === "import"
       ? "Importing"
       : "Copying to Immich";

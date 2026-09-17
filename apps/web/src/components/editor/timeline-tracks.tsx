@@ -12,6 +12,7 @@ import {
   overlapsPrevious,
   type AudioTrack,
   type LayerClip,
+  type Scene,
   type TimelineDoc,
   type TimelineOp,
 } from "@vlogbuddy/shared";
@@ -40,8 +41,8 @@ import type { Selection } from "./selection";
  * bench has a touch set of numbers as well as a desk set.
  */
 const LANES = {
-  desk: { ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]" },
-  touch: { ruler: 26, layer: 44, base: 88, audio: 40, gutter: "w-[52px]" },
+  desk: { scene: 21, ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]" },
+  touch: { scene: 28, ruler: 26, layer: 44, base: 88, audio: 40, gutter: "w-[52px]" },
 } as const;
 
 const MIN_SCALE = 6;
@@ -81,6 +82,40 @@ export function TimelineTracks({
 
   const starts = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
   const musicById = useMemo(() => new Map(music.map((m) => [m.id, m])), [music]);
+
+  /** The scene being renamed, and the words so far. */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+
+  /**
+   * Where each scene opens, on the clock.
+   *
+   * A scene starts at its first shot, and the transition *into* that shot is
+   * the dissolve the break caused — so a marker parked here lands against the
+   * dissolve it explains, which is the only place on the strip where the day
+   * changing is otherwise visible at all.
+   */
+  const sceneMarks = useMemo(() => {
+    const firstClip = new Map<string, (typeof timeline.clips)[number]>();
+    for (const clip of timeline.clips) {
+      if (clip.sceneId && !firstClip.has(clip.sceneId)) firstClip.set(clip.sceneId, clip);
+    }
+    const marks = timeline.scenes.flatMap((scene) => {
+      const clip = firstClip.get(scene.id);
+      return clip ? [{ scene, clip, at: starts[clip.id] ?? 0 }] : [];
+    });
+    return marks.sort((a, b) => a.at - b.at);
+  }, [timeline.clips, timeline.scenes, starts]);
+
+  function commitRename(scene: Scene) {
+    // Enter commits and closes the box, which then blurs — so the guard is what
+    // stops one rename going out twice, and what makes Escape mean Escape.
+    if (renaming !== scene.id) return;
+    const name = draftName.trim();
+    setRenaming(null);
+    if (!name || name === scene.name) return;
+    onDispatch({ type: "scene.rename", sceneId: scene.id, name });
+  }
 
   /** Clip boundaries double as magnets — layers usually want to hit a cut. */
   const snapPoints = useMemo(() => {
@@ -257,6 +292,11 @@ export function TimelineTracks({
       <div className="flex">
         {/* Lane names, parked outside the scroll so they're always readable. */}
         <div className={cn(lanes.gutter, "shrink-0 border-r border-[color:var(--hair-dark)]")}>
+          {sceneMarks.length > 0 && (
+            <div style={{ height: lanes.scene }} className="flex items-center px-2">
+              <span className="eyebrow-light truncate">Scenes</span>
+            </div>
+          )}
           <div style={{ height: lanes.ruler }} />
           {layerLanes.map((n) => (
             <div
@@ -288,6 +328,87 @@ export function TimelineTracks({
 
         <div className="scrollbar-thin scrollbar-dark touch-scroll-x min-w-0 flex-1 overflow-x-auto">
           <div ref={laneRef} className="relative" style={{ width: contentWidth }}>
+            {/*
+              Scene markers, sitting above the ruler because a scene is a fact
+              about the clock rather than about any one lane. Each one is a
+              button until you click it, and a text box after — the derived
+              name is only ever a first guess.
+            */}
+            {sceneMarks.length > 0 && (
+              <div style={{ height: lanes.scene }} className="relative select-none">
+                {sceneMarks.map(({ scene, clip, at }, i) => {
+                  const next = sceneMarks[i + 1];
+                  // Never wider than the scene itself, so a run of short scenes
+                  // reads as several marks rather than one long smear.
+                  const room = ((next ? next.at : totalDuration) - at) * scale - 4;
+                  return (
+                    <div
+                      key={scene.id}
+                      style={{
+                        left: at * scale,
+                        // The box being typed into ignores the scene's width
+                        // and rides over its neighbours: a two-second scene is
+                        // still a scene you can name.
+                        maxWidth: renaming === scene.id ? 220 : Math.max(40, room),
+                        zIndex: renaming === scene.id ? 20 : undefined,
+                      }}
+                      className="absolute inset-y-0 flex items-center gap-1 pl-1"
+                    >
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "absolute inset-y-0 left-0 w-px",
+                          scene.newDay ? "bg-tape-500" : "bg-ink-600",
+                        )}
+                      />
+                      {overlapsPrevious(clip.transitionIn) && (
+                        <span
+                          className="shrink-0 font-mono text-2xs text-ink-500"
+                          title={`${TRANSITION_LABELS[clip.transitionIn]} into this scene`}
+                        >
+                          {TRANSITION_GLYPHS[clip.transitionIn]}
+                        </span>
+                      )}
+                      {renaming === scene.id ? (
+                        <input
+                          autoFocus
+                          value={draftName}
+                          maxLength={80}
+                          onChange={(e) => setDraftName(e.target.value)}
+                          onBlur={() => commitRename(scene)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitRename(scene);
+                            if (e.key === "Escape") setRenaming(null);
+                          }}
+                          className="min-w-0 flex-1 border border-signal-500 bg-ink-950 px-1 font-mono text-2xs uppercase tracking-label text-paper-100 outline-none"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setDraftName(scene.name);
+                            setRenaming(scene.id);
+                          }}
+                          title={
+                            scene.auto.includes("name")
+                              ? "Named from when it was shot — click to call it something else"
+                              : "Click to rename this scene"
+                          }
+                          className={cn(
+                            "min-w-0 truncate font-mono text-2xs uppercase tracking-label transition-colors hover:text-paper-100",
+                            scene.auto.includes("name")
+                              ? "text-ink-400"
+                              : "text-tape-500",
+                          )}
+                        >
+                          {scene.name || "Name this scene"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Ruler */}
             <div
               onClick={seekFromEvent}

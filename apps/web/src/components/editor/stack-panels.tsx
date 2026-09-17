@@ -332,7 +332,7 @@ export function SoundPanel({
             }
             className="check check-dark"
           />
-          Duck the shots under the score
+          Duck the score under the shots
         </label>
       </div>
     </section>

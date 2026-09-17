@@ -1,25 +1,31 @@
 import type PgBoss from "pg-boss";
+import {
+  ALL_QUEUES,
+  QUEUE_EXTRACT_AUDIO,
+  QUEUE_IMMICH_EXPORT,
+  QUEUE_IMMICH_IMPORT,
+  QUEUE_PROCESS_MEDIA,
+  QUEUE_RENDER,
+} from "@vlogbuddy/shared/queues";
 
 /**
  * Jobs that need to enqueue follow-up work reach the queue through here.
  *
  * The worker owns one pg-boss instance, created at boot; handing it around
  * through every call signature would be noise, so index.ts registers it once.
+ *
+ * The names and policies come from `@vlogbuddy/shared/queues` because both
+ * apps create these queues and the first one to boot decides what they mean.
  */
 
-export const QUEUE_PROCESS_MEDIA = "process-media";
-export const QUEUE_EXTRACT_AUDIO = "extract-audio";
-export const QUEUE_RENDER = "render-vlog";
-export const QUEUE_IMMICH_IMPORT = "immich-import";
-export const QUEUE_IMMICH_EXPORT = "immich-export";
-
-export const ALL_QUEUES = [
-  QUEUE_PROCESS_MEDIA,
+export {
+  ALL_QUEUES,
   QUEUE_EXTRACT_AUDIO,
-  QUEUE_RENDER,
-  QUEUE_IMMICH_IMPORT,
   QUEUE_IMMICH_EXPORT,
-];
+  QUEUE_IMMICH_IMPORT,
+  QUEUE_PROCESS_MEDIA,
+  QUEUE_RENDER,
+};
 
 let boss: PgBoss | null = null;
 

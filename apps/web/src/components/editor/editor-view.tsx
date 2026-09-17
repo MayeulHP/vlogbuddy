@@ -328,12 +328,7 @@ export function EditorView({
           {/* On a phone this same inspector arrives as a sheet instead. */}
           {!asSheet && inspector}
 
-          <DirectorPanel
-            slug={slug}
-            timeline={timeline}
-            mediaById={mediaById}
-            locked={rendering}
-          />
+          <DirectorPanel slug={slug} timeline={timeline} locked={rendering} />
 
           <LayerPanel
             timeline={timeline}
