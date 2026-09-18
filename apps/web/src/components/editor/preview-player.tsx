@@ -431,11 +431,22 @@ export function PreviewPlayer({
   if (fx?.outgoingOnTop) stack.reverse();
 
   return (
-    <div className="border border-[color:var(--hair-dark)] bg-ink-950">
-      {/* Clipped, because FFmpeg crops a layer at the frame edge and the
-          preview has to agree — a tall portrait inset otherwise spills out
-          over the transport. */}
-      <div className="relative aspect-video overflow-hidden bg-black">
+    <div className="flex min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-950">
+      {/*
+        The picture takes the height the strip leaves it and keeps its shape.
+
+        Height-bound rather than width-bound — `h-full w-auto` against the
+        flexible row — because a layer is stored as a *fraction of the frame*,
+        so a preview box that isn't the render's shape would put an inset
+        somewhere the render won't. That also means growing the window grows
+        the picture, which is the whole point of it fitting.
+
+        Clipped, because FFmpeg crops a layer at the frame edge and the
+        preview has to agree — a tall portrait inset otherwise spills out
+        over the transport.
+      */}
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+      <div className="relative aspect-video h-full max-h-full w-full max-w-full overflow-hidden bg-black xl:w-auto">
         {fx?.veil && <div className="absolute inset-0" style={{ background: fx.veil }} />}
 
         {src ? (
@@ -502,7 +513,9 @@ export function PreviewPlayer({
       ))}
 
       {/* Transport */}
-      <div className="flex items-center gap-2 border-t border-[color:var(--hair-dark)] bg-ink-900 px-2 py-2 sm:gap-3 sm:px-3">
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2 border-t border-[color:var(--hair-dark)] bg-ink-900 px-2 py-2 sm:gap-3 sm:px-3">
         <button
           onClick={togglePlay}
           className="shrink-0 border border-[color:var(--hair-dark)] px-2 py-1 font-mono text-[11px] text-paper-100 transition-colors hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900"

@@ -263,7 +263,12 @@ export function TimelineTracks({
   );
 
   return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
+    /*
+      Capped rather than sized by its lanes: four layers and three cues would
+      otherwise push the picture off the bottom of the window. Past the cap the
+      lanes scroll against themselves — the page never does.
+    */
+    <section className="flex min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-850 xl:max-h-[42dvh] xl:overflow-y-auto">
       <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-2 py-1.5 sm:px-3 sm:py-2">
         <p className="eyebrow-light">Reel 02 · Strip</p>
         <div className="flex items-center gap-2">

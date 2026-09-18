@@ -103,9 +103,25 @@ export function VlogShell(props: VlogShellProps) {
   const effectiveTab: WorkspaceTab = working ? tab : "watch";
 
   const dark = effectiveTab !== "gather";
+  /**
+   * The cutting bench is the one room that owns the whole window: an editor
+   * you have to scroll is an editor whose picture and strip are never both in
+   * front of you. It takes the viewport from `xl` up, which is where the
+   * inspector column exists — below that the page scrolls as every other room
+   * does, because a 240px panel wedged into a laptop's remaining height is
+   * worse than a scroll.
+   */
+  const fitsViewport = effectiveTab === "edit";
 
   return (
-    <div className={cn("flex min-h-screen flex-col", dark ? "bg-ink-900" : "bg-paper-100")}>
+    <div
+      className={cn(
+        "flex min-h-screen flex-col",
+        dark ? "bg-ink-900" : "bg-paper-100",
+        fitsViewport &&
+          "xl:grid xl:h-[100dvh] xl:min-h-0 xl:grid-rows-[auto_minmax(0,1fr)] xl:overflow-hidden",
+      )}
+    >
       {/* ---------- masthead: always paper, whatever room you're in ---------- */}
       <header className="pt-safe px-safe sticky top-0 z-30 border-b border-[color:var(--hair-strong)] bg-paper-100/95 backdrop-blur">
         <div className="mx-auto max-w-[1600px] px-4 sm:px-7">
@@ -160,7 +176,12 @@ export function VlogShell(props: VlogShellProps) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-7 sm:py-7">
+      <main
+        className={cn(
+          "mx-auto w-full max-w-[1600px] flex-1 px-4 py-5 sm:px-7 sm:py-7",
+          fitsViewport && "xl:min-h-0 xl:px-4 xl:py-3",
+        )}
+      >
         {effectiveTab === "gather" && (
           <GatherView
             slug={vlog.shareSlug}
@@ -185,6 +206,7 @@ export function VlogShell(props: VlogShellProps) {
             timeline={props.timeline}
             revision={props.timelineRevision}
             socket={socket}
+            connected={connected}
             isCreator={isCreator}
             memberId={member.id}
             onBackToGather={() => setTab("gather")}
@@ -210,6 +232,9 @@ export function VlogShell(props: VlogShellProps) {
       <footer
         className={cn(
           "pb-rail border-t px-4 py-3 sm:px-7",
+          // The bench carries its own sync dot in the toolbar; a second one
+          // below the fold would cost the strip a row of height for nothing.
+          fitsViewport && "xl:hidden",
           dark ? "border-[color:var(--hair-dark)]" : "border-[color:var(--hair)]",
         )}
       >

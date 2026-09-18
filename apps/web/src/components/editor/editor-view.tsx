@@ -22,7 +22,7 @@ import { DirectorPanel } from "./director-panel";
 import { TimelineTracks, audioTrackLabel } from "./timeline-tracks";
 import { PreviewPlayer } from "./preview-player";
 import { NO_SELECTION, type Selection } from "./selection";
-import { SectionHead } from "../brand";
+import { cn } from "@/lib/cn";
 
 interface EditorViewProps {
   slug: string;
@@ -32,6 +32,8 @@ interface EditorViewProps {
   timeline: TimelineDoc;
   revision: number;
   socket: VlogSocket | null;
+  /** Whether the room is live; the bench shows its own dot, having no footer. */
+  connected: boolean;
   isCreator: boolean;
   memberId: string;
   /** Jumps this viewer back to the Gather page — same document, other lane. */
@@ -61,6 +63,7 @@ export function EditorView({
   timeline: initialTimeline,
   revision: initialRevision,
   socket,
+  connected,
   isCreator,
   memberId,
   onBackToGather,
@@ -251,39 +254,48 @@ export function EditorView({
           : "Inspector";
 
   return (
-    <div className="space-y-5">
-      <SectionHead
-        tone="ink"
-        eyebrow="Beat 05 · Cut"
-        title="The cutting bench"
-        note="Already assembled from the crew's marks — this is where you tighten it. Trim, retime, layer, score. Everyone edits the same strip, live."
-        right={
-          <div className="flex flex-wrap items-stretch gap-2 sm:gap-3">
-            <button onClick={onBackToGather} className="btn-quiet-dark order-3 sm:order-none sm:self-end">
-              ← Back to the floor
-            </button>
-            <div className="order-1 border border-[color:var(--hair-dark)] bg-ink-850 px-3 py-2 text-right sm:order-none">
-              <p className="eyebrow-light">Running time</p>
-              <p className="timecode mt-0.5 text-lg leading-none text-paper-100">
-                {formatDuration(totalDuration)}
-              </p>
-              <p className="eyebrow-light mt-1">
-                {timeline.clips.length} shot{timeline.clips.length === 1 ? "" : "s"}
-                {timeline.layers.length > 0 && ` · ${timeline.layers.length} layer${timeline.layers.length === 1 ? "" : "s"}`}
-              </p>
-            </div>
-            {isCreator && (
-              <button
-                onClick={render}
-                disabled={rendering || timeline.clips.length === 0}
-                className="btn-signal order-2 flex-1 sm:order-none sm:flex-none sm:self-stretch"
-              >
-                {rendering ? "Loading…" : "Print the film"}
-              </button>
+    <div className="space-y-5 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-2 xl:space-y-0">
+      {/*
+        The bench's one row of chrome, in place of a section heading whose
+        prose cost the picture ninety pixels. The room is named in the
+        masthead; what an editor needs in front of it is the running time its
+        edits are changing, and the way back.
+      */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border border-[color:var(--hair-dark)] bg-ink-850 px-3 py-2 xl:h-11 xl:shrink-0 xl:flex-nowrap xl:py-0">
+        <button onClick={onBackToGather} className="btn-quiet-dark shrink-0 px-2">
+          ← The floor
+        </button>
+
+        <span className="timecode shrink-0 text-base leading-none text-paper-100">
+          {formatDuration(totalDuration)}
+        </span>
+        <span className="eyebrow-light min-w-0 truncate">
+          {timeline.clips.length} shot{timeline.clips.length === 1 ? "" : "s"}
+          {timeline.layers.length > 0 &&
+            ` · ${timeline.layers.length} layer${timeline.layers.length === 1 ? "" : "s"}`}
+        </span>
+
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-label text-ink-400">
+          <span
+            aria-hidden
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              connected ? "animate-pulse-dot bg-leader-500" : "bg-signal-600",
             )}
-          </div>
-        }
-      />
+          />
+          <span className="hidden sm:inline">{connected ? "Synced" : "Reconnecting…"}</span>
+        </span>
+
+        {isCreator && (
+          <button
+            onClick={render}
+            disabled={rendering || timeline.clips.length === 0}
+            className="btn-signal shrink-0"
+          >
+            {rendering ? "Loading…" : "Print the film"}
+          </button>
+        )}
+      </div>
 
       {error && (
         <p className="border border-signal-500/40 bg-signal-900/30 px-3 py-2 font-mono text-[11px] text-signal-300">
@@ -296,8 +308,13 @@ export function EditorView({
         track is sized by its widest item's min-content, so one stubborn panel
         was making the whole page wider than the phone it was on.
       */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
-        <div className="min-w-0 space-y-4">
+      <div className="grid grid-cols-1 gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_320px] xl:gap-2">
+        {/*
+          Two rows, and only the first of them flexes: the picture takes
+          whatever the strip doesn't need, so a tall monitor gets a bigger
+          frame rather than a taller waveform.
+        */}
+        <div className="min-w-0 space-y-4 xl:grid xl:min-h-0 xl:grid-rows-[minmax(0,1fr)_auto] xl:gap-2 xl:space-y-0">
           <PreviewPlayer
             timeline={timeline}
             mediaById={mediaById}
@@ -324,7 +341,7 @@ export function EditorView({
           />
         </div>
 
-        <aside className="space-y-4">
+        <aside className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:pb-1 xl:pr-1">
           {/* On a phone this same inspector arrives as a sheet instead. */}
           {!asSheet && inspector}
 
