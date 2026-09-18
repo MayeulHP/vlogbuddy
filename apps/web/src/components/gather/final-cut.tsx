@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import {
   clipDuration,
   estimatedClipDuration,
@@ -15,6 +15,7 @@ import {
   setCutOverrideAction,
   setMusicBedAction,
 } from "@/lib/actions/cut";
+import { moveMusicAction, requestAudioExtractionAction } from "@/lib/actions/music";
 import { SectionHead } from "../brand";
 import { useIsTouch } from "@/hooks/use-media-query";
 import { cn } from "@/lib/cn";
@@ -48,6 +49,10 @@ export function FinalCut({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   /** Local order while a drag settles, so the strip doesn't snap back. */
   const [pendingOrder, setPendingOrder] = useState<string[] | null>(null);
+  /** Local needle while a drag settles, for the same reason. */
+  const [needle, setNeedle] = useState<number | null>(null);
+  const [draggingNeedle, setDraggingNeedle] = useState(false);
+  const railRef = useRef<HTMLDivElement | null>(null);
 
   const byId = useMemo(() => new Map(media.map((m) => [m.id, m])), [media]);
 
@@ -106,6 +111,8 @@ export function FinalCut({
   const bedTrack = timeline.audio.find((t) => t.role === "bed") ?? null;
   const bed = music.find((t) => bedTrack?.musicItemId === t.id) ?? null;
   const extraCues = timeline.audio.filter((t) => t.role !== "bed").length;
+  /** The stored fraction while it's settling, so the needle doesn't snap back. */
+  const needlePos = needle ?? bed?.timelinePosition ?? 0;
   const pinned = media.filter((m) => m.cutOverride).length;
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>) {
@@ -141,6 +148,47 @@ export function FinalCut({
     const next = [...ids];
     next.splice(to, 0, next.splice(from, 1)[0]);
     commitOrder(next);
+  }
+
+  /**
+   * Where the music comes in, drawn on the one surface whose left-to-right is
+   * running time. The soundtrack lane used to own this, against the light
+   * table — but that axis is capture order, so the handle sat under a photo
+   * the music didn't start at. Clip widths are clamped at both ends, so this
+   * isn't proportional either; the timecode in the band is the exact reading
+   * and the needle is the rough gesture that sets it.
+   */
+  function needleFrom(clientX: number) {
+    const rect = railRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }
+
+  function beginNeedle(clientX: number, el: HTMLElement, pointerId: number) {
+    el.setPointerCapture(pointerId);
+    setDraggingNeedle(true);
+    setNeedle(needleFrom(clientX));
+  }
+
+  function moveNeedle(clientX: number) {
+    if (!draggingNeedle) return;
+    setNeedle(needleFrom(clientX));
+  }
+
+  function endNeedle(clientX: number) {
+    if (!draggingNeedle) return;
+    setDraggingNeedle(false);
+    commitNeedle(needleFrom(clientX));
+  }
+
+  function commitNeedle(position: number) {
+    if (!bed) return;
+    setNeedle(position);
+    startTransition(async () => {
+      const res = await moveMusicAction(slug, { musicItemId: bed.id, timelinePosition: position });
+      if (!res.ok) setError(res.error);
+      setNeedle(null);
+    });
   }
 
   function drop(toIndex: number) {
@@ -205,143 +253,208 @@ export function FinalCut({
       ) : (
         <div className="scrollbar-thin scrollbar-dark touch-scroll-x mt-4 overflow-x-auto bg-ink-900 shadow-print">
           <div className="perf-strip px-3 py-[13px]">
-            <div className="flex items-stretch">
-              {inCut.map(({ clip, item }, index) => (
-                <div key={clip.id} className="flex shrink-0 items-stretch">
-                  {sceneLabels.has(index) && (
+            {/* w-max so the needle rail measures the strip, not the viewport. */}
+            <div className="w-max">
+              <div className="flex items-stretch">
+                {inCut.map(({ clip, item }, index) => (
+                  <div key={clip.id} className="flex shrink-0 items-stretch">
+                    {sceneLabels.has(index) && (
+                      <div
+                        className={cn(
+                          "flex shrink-0 items-end pb-1 pl-2 pr-1",
+                          index > 0 && "ml-1 border-l border-dashed border-ink-600",
+                        )}
+                      >
+                        <span className="whitespace-nowrap font-mono text-2xs uppercase tracking-label text-ink-400">
+                          {sceneLabels.get(index)}
+                        </span>
+                      </div>
+                    )}
+                    <DropSlot
+                      active={dragOverIndex === index && Boolean(draggingId)}
+                      onOver={() => setDragOverIndex(index)}
+                      onDrop={() => drop(index)}
+                    />
                     <div
+                      draggable
+                      onDragStart={() => setDraggingId(item.id)}
+                      onDragEnd={() => {
+                        setDraggingId(null);
+                        setDragOverIndex(null);
+                      }}
+                      style={{
+                        width: `${Math.max(74, Math.min(184, clipDuration(clip, durations[item.id]) * 16))}px`,
+                      }}
                       className={cn(
-                        "flex shrink-0 items-end pb-1 pl-2 pr-1",
-                        index > 0 && "ml-1 border-l border-dashed border-ink-600",
+                        "group relative h-24 cursor-grab overflow-hidden border border-ink-700 bg-ink-850 transition-all hover:border-paper-200/60 active:cursor-grabbing",
+                        draggingId === item.id && "opacity-25",
                       )}
                     >
-                      <span className="whitespace-nowrap font-mono text-2xs uppercase tracking-label text-ink-400">
-                        {sceneLabels.get(index)}
+                      <button
+                        onClick={() => onOpenClip?.(item)}
+                        className="block h-full w-full"
+                        title={item.originalFilename}
+                      >
+                        {item.thumbnailUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={item.thumbnailUrl}
+                            alt=""
+                            draggable={false}
+                            className="print-tone h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-full w-full bg-ink-800 bg-hatch" />
+                        )}
+                      </button>
+
+                      <span className="pointer-events-none absolute left-0 top-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200">
+                        {String(index + 1).padStart(2, "0")}
                       </span>
+
+                      {item.cutOverride === "include" && (
+                        <span
+                          className="pointer-events-none absolute left-0 top-4 bg-signal-600 px-1 font-mono text-2xs uppercase tracking-label text-paper-50"
+                          title="Forced in by hand"
+                        >
+                          In
+                        </span>
+                      )}
+
+                      <span
+                        className={cn(
+                          "pointer-events-none absolute right-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200",
+                          // Clear of the nudge arrows that only exist on touch.
+                          touch ? "bottom-8" : "bottom-0",
+                        )}
+                      >
+                        {formatDuration(clipDuration(clip, durations[item.id]))}
+                      </span>
+
+                      <button
+                        onClick={() =>
+                          run(() =>
+                            setCutOverrideAction(slug, {
+                              targetType: "media",
+                              targetId: item.id,
+                              override: "exclude",
+                            }),
+                          )
+                        }
+                        className="touch-visible absolute right-0 top-0 flex min-h-[30px] min-w-[30px] items-center justify-center bg-ink-950/75 px-1.5 py-0.5 font-mono text-2xs text-paper-200 opacity-0 transition-opacity hover:bg-signal-600 focus:opacity-100 group-hover:opacity-100"
+                        title="Drop this shot from the cut"
+                      >
+                        ✕
+                      </button>
+
+                      {touch && (
+                        <div className="absolute inset-x-0 bottom-0 flex justify-between">
+                          <button
+                            onClick={() => nudge(item.id, -1)}
+                            disabled={index === 0 || pending}
+                            className="flex h-8 w-9 items-center justify-center bg-ink-950/75 font-mono text-sm text-paper-200 disabled:opacity-25"
+                            aria-label="Move this shot earlier"
+                          >
+                            ◀
+                          </button>
+                          <button
+                            onClick={() => nudge(item.id, 1)}
+                            disabled={index === inCut.length - 1 || pending}
+                            className="flex h-8 w-9 items-center justify-center bg-ink-950/75 font-mono text-sm text-paper-200 disabled:opacity-25"
+                            aria-label="Move this shot later"
+                          >
+                            ▶
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <DropSlot
-                    active={dragOverIndex === index && Boolean(draggingId)}
-                    onOver={() => setDragOverIndex(index)}
-                    onDrop={() => drop(index)}
-                  />
-                  <div
-                    draggable
-                    onDragStart={() => setDraggingId(item.id)}
-                    onDragEnd={() => {
-                      setDraggingId(null);
-                      setDragOverIndex(null);
-                    }}
-                    style={{
-                      width: `${Math.max(74, Math.min(184, clipDuration(clip, durations[item.id]) * 16))}px`,
-                    }}
+                  </div>
+                ))}
+
+                <DropSlot
+                  active={dragOverIndex === inCut.length && Boolean(draggingId)}
+                  onOver={() => setDragOverIndex(inCut.length)}
+                  onDrop={() => drop(inCut.length)}
+                  wide
+                />
+
+                {leftOut.length > 0 && (
+                  <button
+                    onClick={() => setTrayOpen((v) => !v)}
                     className={cn(
-                      "group relative h-24 cursor-grab overflow-hidden border border-ink-700 bg-ink-850 transition-all hover:border-paper-200/60 active:cursor-grabbing",
-                      draggingId === item.id && "opacity-25",
+                      "flex h-24 w-24 shrink-0 flex-col items-center justify-center gap-1 border border-dashed font-mono text-2xs uppercase tracking-label transition-colors",
+                      trayOpen
+                        ? "border-signal-500 bg-signal-900/40 text-signal-300"
+                        : "border-ink-600 text-ink-400 hover:border-paper-200/60 hover:text-paper-200",
                     )}
                   >
-                    <button
-                      onClick={() => onOpenClip?.(item)}
-                      className="block h-full w-full"
-                      title={item.originalFilename}
-                    >
-                      {item.thumbnailUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={item.thumbnailUrl}
-                          alt=""
-                          draggable={false}
-                          className="print-tone h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="h-full w-full bg-ink-800 bg-hatch" />
-                      )}
-                    </button>
+                    <span className="text-sm">{trayOpen ? "▾" : "＋"}</span>
+                    The floor
+                    <span className="text-ink-500">{leftOut.length} left</span>
+                  </button>
+                )}
+              </div>
 
-                    <span className="pointer-events-none absolute left-0 top-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200">
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
+              {/* Where the bed comes in. Only the bed: a hand-placed cue's
+                  position lives on the bench, and drawing one here would be a
+                  handle that moves nothing. */}
+              {bed && (
+                <div
+                  ref={railRef}
+                  className={cn(
+                    "relative mt-1.5",
+                    touch ? "h-10" : "h-6",
+                    // A finger on the rail is scrolling the strip; the handle
+                    // below takes the drag, as the cut line does on the plot.
+                    touch ? "touch-pan-x" : "touch-none",
+                  )}
+                  onPointerDown={(e) => {
+                    if (e.pointerType !== "mouse") return;
+                    beginNeedle(e.clientX, e.currentTarget, e.pointerId);
+                  }}
+                  onPointerMove={(e) => moveNeedle(e.clientX)}
+                  onPointerUp={(e) => endNeedle(e.clientX)}
+                >
+                  <div
+                    aria-hidden
+                    className="absolute inset-x-0 top-1/2 h-px bg-[color:var(--hair-dark)]"
+                  />
 
-                    {item.cutOverride === "include" && (
-                      <span
-                        className="pointer-events-none absolute left-0 top-4 bg-signal-600 px-1 font-mono text-2xs uppercase tracking-label text-paper-50"
-                        title="Forced in by hand"
-                      >
-                        In
-                      </span>
+                  {/* The run of the bed under the cut — dashed while there's no
+                      file behind it, because that plays as silence. */}
+                  <div
+                    aria-hidden
+                    className={cn(
+                      "absolute right-0 top-1/2 h-0 border-t border-signal-600",
+                      !bed.extractedAudioKey && "border-dashed",
+                      draggingNeedle && "border-t-2",
                     )}
+                    style={{ left: `${needlePos * 100}%` }}
+                  />
 
-                    <span
-                      className={cn(
-                        "pointer-events-none absolute right-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200",
-                        // Clear of the nudge arrows that only exist on touch.
-                        touch ? "bottom-8" : "bottom-0",
-                      )}
-                    >
-                      {formatDuration(clipDuration(clip, durations[item.id]))}
-                    </span>
-
-                    <button
-                      onClick={() =>
-                        run(() =>
-                          setCutOverrideAction(slug, {
-                            targetType: "media",
-                            targetId: item.id,
-                            override: "exclude",
-                          }),
-                        )
-                      }
-                      className="touch-visible absolute right-0 top-0 flex min-h-[30px] min-w-[30px] items-center justify-center bg-ink-950/75 px-1.5 py-0.5 font-mono text-2xs text-paper-200 opacity-0 transition-opacity hover:bg-signal-600 focus:opacity-100 group-hover:opacity-100"
-                      title="Drop this shot from the cut"
-                    >
-                      ✕
-                    </button>
-
-                    {touch && (
-                      <div className="absolute inset-x-0 bottom-0 flex justify-between">
-                        <button
-                          onClick={() => nudge(item.id, -1)}
-                          disabled={index === 0 || pending}
-                          className="flex h-8 w-9 items-center justify-center bg-ink-950/75 font-mono text-sm text-paper-200 disabled:opacity-25"
-                          aria-label="Move this shot earlier"
-                        >
-                          ◀
-                        </button>
-                        <button
-                          onClick={() => nudge(item.id, 1)}
-                          disabled={index === inCut.length - 1 || pending}
-                          className="flex h-8 w-9 items-center justify-center bg-ink-950/75 font-mono text-sm text-paper-200 disabled:opacity-25"
-                          aria-label="Move this shot later"
-                        >
-                          ▶
-                        </button>
-                      </div>
+                  <div
+                    className={cn(
+                      "absolute top-1/2 flex -translate-x-1/2 -translate-y-1/2 cursor-ew-resize touch-none items-center justify-center",
+                      touch ? "h-10 w-10" : "h-6 w-6",
+                    )}
+                    style={{ left: `${needlePos * 100}%` }}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      beginNeedle(e.clientX, e.currentTarget, e.pointerId);
+                    }}
+                    onPointerMove={(e) => moveNeedle(e.clientX)}
+                    onPointerUp={(e) => endNeedle(e.clientX)}
+                    onPointerCancel={(e) => endNeedle(e.clientX)}
+                    title="Drag to move where the music comes in"
+                  >
+                    <span className="h-4 w-[3px] bg-signal-600" />
+                    {draggingNeedle && (
+                      <span className="timecode absolute -top-4 left-1/2 -translate-x-1/2 whitespace-nowrap bg-signal-600 px-1 text-2xs text-paper-50">
+                        {formatDuration(needlePos * total)}
+                      </span>
                     )}
                   </div>
                 </div>
-              ))}
-
-              <DropSlot
-                active={dragOverIndex === inCut.length && Boolean(draggingId)}
-                onOver={() => setDragOverIndex(inCut.length)}
-                onDrop={() => drop(inCut.length)}
-                wide
-              />
-
-              {leftOut.length > 0 && (
-                <button
-                  onClick={() => setTrayOpen((v) => !v)}
-                  className={cn(
-                    "flex h-24 w-24 shrink-0 flex-col items-center justify-center gap-1 border border-dashed font-mono text-2xs uppercase tracking-label transition-colors",
-                    trayOpen
-                      ? "border-signal-500 bg-signal-900/40 text-signal-300"
-                      : "border-ink-600 text-ink-400 hover:border-paper-200/60 hover:text-paper-200",
-                  )}
-                >
-                  <span className="text-sm">{trayOpen ? "▾" : "＋"}</span>
-                  The floor
-                  <span className="text-ink-500">{leftOut.length} left</span>
-                </button>
               )}
             </div>
           </div>
@@ -354,9 +467,41 @@ export function FinalCut({
                 <span className="min-w-0 flex-1 basis-40 truncate text-xs text-paper-200">
                   {bed.title ?? bed.url}
                   <span className="timecode ml-2 text-2xs text-ink-400">
-                    in at {formatDuration(bedTrack?.startAt ?? 0)}
+                    in at {formatDuration(needle !== null ? needle * total : bedTrack?.startAt ?? 0)}
                   </span>
                 </span>
+
+                {/* A bed with no file is silence, and this is where that shows
+                    up on the film rather than in a list somewhere else. */}
+                {!bed.extractedAudioKey && (
+                  <button
+                    onClick={() => run(() => requestAudioExtractionAction(slug, bed.id))}
+                    disabled={pending}
+                    className="shrink-0 font-mono text-2xs uppercase tracking-label text-signal-400 underline-offset-2 hover:underline"
+                  >
+                    Silent until the sound comes through — fetch it
+                  </button>
+                )}
+
+                {/* The needle is the gesture; this is the same value for a
+                    keyboard, the way the cut line pairs its drag with a slider. */}
+                <label className="flex shrink-0 items-center gap-2">
+                  <span className="eyebrow-light">In at</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.005}
+                    value={needlePos}
+                    onChange={(e) => setNeedle(Number(e.target.value))}
+                    onMouseUp={(e) => commitNeedle(Number((e.target as HTMLInputElement).value))}
+                    onTouchEnd={(e) => commitNeedle(Number((e.target as HTMLInputElement).value))}
+                    onKeyUp={(e) => commitNeedle(Number((e.target as HTMLInputElement).value))}
+                    className="slider-dark w-24"
+                    aria-label="Where the music comes in"
+                  />
+                </label>
+
                 <button
                   onClick={() => run(() => setMusicBedAction(slug, null))}
                   disabled={pending}

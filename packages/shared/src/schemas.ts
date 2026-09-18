@@ -57,7 +57,12 @@ export type ReactInput = z.infer<typeof reactSchema>;
 export const addMusicSchema = z.object({
   url: z.string().url("Paste a YouTube link"),
   /** 0..1 position along the rough timeline. */
-  timelinePosition: z.number().min(0).max(1).default(0.5),
+  /**
+   * From the top unless someone moves it. The soundtrack lane used to make the
+   * placing the first thing you did, so the middle was a neutral parking spot;
+   * now a track lands and plays, and the needle on the cut is the second step.
+   */
+  timelinePosition: z.number().min(0).max(1).default(0),
 });
 export type AddMusicInput = z.infer<typeof addMusicSchema>;
 
