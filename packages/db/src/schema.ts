@@ -313,7 +313,8 @@ export const musicItems = pgTable(
     thumbnailUrl: text("thumbnail_url"),
 
     /** 0..1 placement along the rough timeline in the dump view. */
-    timelinePosition: real("timeline_position").notNull().default(0.5),
+    /** Fraction of the finished film where the track comes in. */
+    timelinePosition: real("timeline_position").notNull().default(0),
 
     /** Populated by yt-dlp once the worker has fetched the link's audio. */
     extractedAudioKey: text("extracted_audio_key"),

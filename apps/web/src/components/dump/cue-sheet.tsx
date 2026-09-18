@@ -8,7 +8,7 @@ import {
   deleteMusicAction,
   requestAudioExtractionAction,
 } from "@/lib/actions/music";
-import { setMusicBedAction } from "@/lib/actions/cut";
+import { setMusicInCutAction } from "@/lib/actions/cut";
 import { SectionHead } from "../brand";
 import { ReactionBar } from "./reaction-bar";
 import { cn } from "@/lib/cn";
@@ -26,11 +26,10 @@ const SOURCE_LABEL: Record<string, string> = {
  *
  * The lane this replaces drew every track at a point along the footage, which
  * read as "the music starts here" and wasn't: the light table is ordered by
- * capture, a track's position is a fraction of the finished film's running
- * time, and only the bed's is read at all. So the placing is gone from here
- * until it can be drawn against real film time, and what's left is the part
- * that was always doing the work — the crew marking up tracks, and one of them
- * carrying the film.
+ * capture and a track's position is a fraction of the finished film's running
+ * time. The placing now lives on the rough cut, where left-to-right really is
+ * time, and this is the list: what's in the film, in the order it plays, and
+ * what the crew made of each track.
  */
 export function CueSheet({
   slug,
@@ -38,8 +37,7 @@ export function CueSheet({
   tiers,
   memberId,
   crew,
-  bedMusicId,
-  bedStartAt,
+  startsAt,
   canEdit,
 }: {
   slug: string;
@@ -47,10 +45,8 @@ export function CueSheet({
   tiers: ReactionTier[];
   memberId: string;
   crew?: number;
-  /** The track currently playing under the cut, if any. */
-  bedMusicId: string | null;
-  /** Where the bed comes in, in seconds of finished film. */
-  bedStartAt: number | null;
+  /** Where each track in the film comes in, in seconds of finished film. */
+  startsAt: Record<string, number>;
   canEdit: boolean;
 }) {
   const [url, setUrl] = useState("");
@@ -59,20 +55,20 @@ export function CueSheet({
   const [playing, setPlaying] = useState<string | null>(null);
 
   /**
-   * The bed first, then whatever the crew has marked highest — the running
-   * order of the argument, not of the film. A track sitting above the bed on
-   * marks is the useful thing to be able to see, because the bed only changes
-   * when someone says so.
+   * What's in the film first, in the order it plays, then everything else by
+   * what the crew made of it. A track sitting near the top of the second group
+   * is the useful thing to be able to see: the queue only changes when someone
+   * says so, so that's the argument for changing it.
    */
-  const ordered = useMemo(
-    () =>
-      [...music].sort((a, b) => {
-        if (a.id === bedMusicId) return -1;
-        if (b.id === bedMusicId) return 1;
-        return b.reactions.rank - a.reactions.rank;
-      }),
-    [music, bedMusicId],
-  );
+  const ordered = useMemo(() => {
+    const queued = music
+      .filter((t) => t.selected)
+      .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+    const rest = music
+      .filter((t) => !t.selected)
+      .sort((a, b) => b.reactions.rank - a.reactions.rank);
+    return [...queued, ...rest];
+  }, [music]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -90,7 +86,7 @@ export function CueSheet({
       <SectionHead
         eyebrow="Sound"
         title="What it sounds like"
-        note="Mark the tracks like you mark the footage. The crew's favourite goes under the cut, and stays there until someone picks another."
+        note="Mark the tracks like you mark the footage. What's in the film plays in the order it was added, each track picking up where the last one ends."
         right={<span className="eyebrow">{music.length} tracks</span>}
       />
 
@@ -126,7 +122,9 @@ export function CueSheet({
 
         {ordered.map((track) => {
           const isOwn = track.addedById === memberId;
-          const isBed = track.id === bedMusicId;
+          const inFilm = track.selected;
+          const place = inFilm ? (track.orderIndex ?? 0) + 1 : null;
+          const comesIn = startsAt[track.id];
           const isPlaying = playing === track.id;
 
           return (
@@ -134,9 +132,9 @@ export function CueSheet({
               key={track.id}
               className={cn(
                 "border-b border-[color:var(--hair)] last:border-b-0",
-                // The bed wears the one signal edge in the sheet, so which
-                // track is carrying the film needs no legend.
-                isBed && "border-l-2 border-l-signal-600 bg-paper-100",
+                // What's in the film wears the signal edge, so the queue can
+                // be read off the sheet without a legend.
+                inFilm && "border-l-2 border-l-signal-600 bg-paper-100",
               )}
             >
               <div className="flex items-start gap-3 px-3 py-2.5">
@@ -161,7 +159,11 @@ export function CueSheet({
                     <span className="eyebrow shrink-0">
                       {SOURCE_LABEL[track.source] ?? track.source}
                     </span>
-                    {isBed && <span className="tag-signal shrink-0">On the cut</span>}
+                    {place !== null && (
+                      <span className="tag-signal shrink-0">
+                        {place === 1 ? "Opens the film" : `${place}${ordinal(place)} up`}
+                      </span>
+                    )}
                   </div>
 
                   <p className="mt-1 font-mono text-2xs text-ink-500">
@@ -184,10 +186,10 @@ export function CueSheet({
                           ? "Sound didn't come through — try again"
                           : "Silent in the film — get the sound"}
                       </button>
-                    ) : isBed && bedStartAt !== null ? (
+                    ) : inFilm && comesIn !== undefined ? (
                       <>
                         Sound ready
-                        <span className="timecode ml-2">in at {formatDuration(bedStartAt)}</span>
+                        <span className="timecode ml-2">in at {formatDuration(comesIn)}</span>
                       </>
                     ) : (
                       "Sound ready"
@@ -215,12 +217,12 @@ export function CueSheet({
                         <button
                           onClick={() =>
                             startTransition(() =>
-                              setMusicBedAction(slug, isBed ? null : track.id).then(() => {}),
+                              setMusicInCutAction(slug, track.id, !inFilm).then(() => {}),
                             )
                           }
-                          className={cn("shrink-0", isBed ? "btn-quiet" : "btn-outline")}
+                          className={cn("shrink-0", inFilm ? "btn-quiet" : "btn-outline")}
                         >
-                          {isBed ? "Take it off" : "Put it under the cut"}
+                          {inFilm ? "Take it out" : "Add to the film"}
                         </button>
                       )}
                       <button
@@ -263,4 +265,10 @@ export function CueSheet({
       </div>
     </section>
   );
+}
+
+/** 2nd, 3rd, 4th — the queue reads as places, not indices. */
+function ordinal(place: number): string {
+  if (place % 100 >= 11 && place % 100 <= 13) return "th";
+  return ["th", "st", "nd", "rd"][place % 10] ?? "th";
 }

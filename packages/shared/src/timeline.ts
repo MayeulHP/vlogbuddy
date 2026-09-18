@@ -68,8 +68,17 @@ export type TitleOverlay = z.infer<typeof titleOverlaySchema>;
 export const autoFieldSchema = z.enum(AUTO_FIELDS);
 
 export const directorSettingsSchema = z.object({
-  enabled: z.boolean().default(true),
-  pace: z.enum(PACE_PRESETS).default("standard"),
+  /**
+   * Off to begin with, and relaxed when it's switched on.
+   *
+   * A film that arrives at the lengths people actually filmed is the honest
+   * starting point: nothing has been taken away before anyone has looked at
+   * it. Turning the auto-cut on is then a thing the crew chooses once they
+   * want the pile tightened, rather than a thing they discover has already
+   * happened to their forty-second shot.
+   */
+  enabled: z.boolean().default(false),
+  pace: z.enum(PACE_PRESETS).default("relaxed"),
   /** Burn the scene name over the first shot of each scene. */
   sceneText: z.boolean().default(false),
   /**

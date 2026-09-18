@@ -103,20 +103,20 @@ function mergeIntoOrder(
 }
 
 /**
- * Picks the music bed: whatever was chosen and is still in, otherwise the
- * best-voted track. Nobody has to make this decision for the vlog to render.
+ * The soundtrack, in the order it plays: whatever the crew put in the film and
+ * hasn't taken out again. Nobody has to make this decision for the vlog to
+ * render — an untouched pile falls back to its best-marked track, which is how
+ * a film gets music before anyone has thought about music.
  */
-function chooseBed(
+function chooseSoundtrack(
   tracks: { id: string; rank: number; included: boolean }[],
-  currentlyChosen: string | null,
-): string | null {
-  if (currentlyChosen && tracks.some((t) => t.id === currentlyChosen && t.included)) {
-    return currentlyChosen;
-  }
-  const best = tracks
-    .filter((t) => t.included)
-    .sort((a, b) => b.rank - a.rank)[0];
-  return best?.id ?? null;
+  chosen: string[],
+): string[] {
+  const byId = new Map(tracks.map((t) => [t.id, t]));
+  const kept = chosen.filter((id) => byId.get(id)?.included);
+  if (kept.length > 0) return kept;
+  const best = tracks.filter((t) => t.included).sort((a, b) => b.rank - a.rank)[0];
+  return best ? [best.id] : [];
 }
 
 /**
@@ -212,6 +212,7 @@ export async function syncCut(
           id: musicItems.id,
           timelinePosition: musicItems.timelinePosition,
           cutOverride: musicItems.cutOverride,
+          audioDurationSeconds: musicItems.audioDurationSeconds,
           bpm: musicItems.bpm,
           beatOffsetSeconds: musicItems.beatOffsetSeconds,
           beatTimes: musicItems.beatTimes,
@@ -269,17 +270,23 @@ export async function syncCut(
     rank: rankOf.get(`music:${t.id}`) ?? 0,
     included: t.cutOverride !== "exclude",
     timelinePosition: t.timelinePosition,
+    seconds: t.audioDurationSeconds,
   }));
 
-  const previousBed = selectionRows.find((s) => s.targetType === "music")?.targetId ?? null;
-  const bedMusicId = chooseBed(trackState, previousBed);
+  const previousSoundtrack = selectionRows
+    .filter((s) => s.targetType === "music")
+    .sort((a, b) => a.orderIndex - b.orderIndex)
+    .map((s) => s.targetId);
+  const soundtrack = chooseSoundtrack(trackState, previousSoundtrack);
+  const bedMusicId = soundtrack[0] ?? null;
 
   // --- persist the running order --------------------------------------------
 
   const orderChanged =
     order.length !== previousOrder.length ||
     order.some((id, i) => id !== previousOrder[i]) ||
-    bedMusicId !== previousBed;
+    soundtrack.length !== previousSoundtrack.length ||
+    soundtrack.some((id, i) => id !== previousSoundtrack[i]);
 
   if (orderChanged) {
     const rows = [
@@ -290,17 +297,13 @@ export async function syncCut(
         orderIndex: i,
         selectedById: memberId,
       })),
-      ...(bedMusicId
-        ? [
-            {
-              vlogId,
-              targetType: "music" as const,
-              targetId: bedMusicId,
-              orderIndex: 0,
-              selectedById: memberId,
-            },
-          ]
-        : []),
+      ...soundtrack.map((targetId, i) => ({
+        vlogId,
+        targetType: "music" as const,
+        targetId,
+        orderIndex: i,
+        selectedById: memberId,
+      })),
     ];
 
     await db.transaction(async (tx) => {
@@ -360,10 +363,11 @@ export async function syncCut(
     next,
     Object.fromEntries(footage.map((m) => [m.id, m.durationSeconds])),
   );
-  const bedPosition = trackState.find((t) => t.id === bedMusicId)?.timelinePosition ?? 0;
-  const nextAudio = reconcileAudio(
+  const stateById = new Map(trackState.map((t) => [t.id, t]));
+  const bedPosition = stateById.get(bedMusicId ?? "")?.timelinePosition ?? 0;
+  const nextAudio = reconcileSoundtrack(
     next.audio,
-    bedMusicId,
+    soundtrack.map((id) => ({ musicItemId: id, seconds: stateById.get(id)?.seconds ?? null })),
     bedPosition * totalDuration,
     options.resyncBedStart ?? false,
   );
@@ -389,55 +393,113 @@ export async function syncCut(
 }
 
 /**
- * Keeps the music bed in step with the soundtrack lane — but never touches an
- * uploaded audio bed someone deliberately chose in the editor, preserves the
- * volume and fades they dialled in for a track that's staying, and leaves
- * every hand-placed track alone. Only the one track marked `bed` belongs to
- * the vote.
+ * Keeps the soundtrack in step with what the crew chose.
+ *
+ * The tracks play back to back: the first is the bed and starts where the
+ * needle on the cut puts it, and each one after it picks up where the one
+ * before it ends. That chain is rebuilt on every sync rather than written down
+ * once, because a track's length arrives minutes after the link does — a queue
+ * built before the sound landed corrects itself the moment it has.
+ *
+ * Everything else in the stack is left alone: an uploaded audio bed somebody
+ * chose on the bench wins outright, and a hand-placed cue is nobody's business
+ * but the person who placed it. The one thing this does claim is a track the
+ * soundtrack also holds — the same music can't be both the queue's and yours.
  */
-function reconcileAudio(
+interface SoundtrackEntry {
+  musicItemId: string;
+  /** How long the file runs, once we've heard it. */
+  seconds: number | null;
+}
+
+function reconcileSoundtrack(
   audio: AudioTrack[],
-  bedMusicId: string | null,
+  chain: SoundtrackEntry[],
   startAt: number,
   resyncStart: boolean,
 ): AudioTrack[] {
-  const index = audio.findIndex((t) => t.role === "bed");
-  const existing = index === -1 ? null : audio[index];
-  if (existing?.mediaItemId) return audio; // an uploaded file wins; leave it alone.
+  const existingBed = audio.find((t) => t.role === "bed") ?? null;
+  if (existingBed?.mediaItemId) return audio; // an uploaded file wins; leave it alone.
 
-  if (!bedMusicId) {
-    if (!existing) return audio;
-    return audio.filter((_, i) => i !== index);
+  const claimed = new Set(chain.map((e) => e.musicItemId));
+  const handPlaced = audio.filter(
+    (t) => t.role !== "bed" && !(t.musicItemId && claimed.has(t.musicItemId)),
+  );
+
+  if (chain.length === 0) {
+    return handPlaced.length === audio.length ? audio : handPlaced;
   }
 
-  if (existing?.musicItemId === bedMusicId) {
-    // Same track as before — keep whatever was dialled in for it in the editor,
-    // unless someone just dragged it along the soundtrack lane.
-    if (!resyncStart || Math.abs(existing.startAt - startAt) < 0.05) return audio;
-    const next = [...audio];
-    next[index] = { ...existing, startAt: Math.max(0, startAt) };
-    return next;
-  }
+  const byMusicId = new Map<string, AudioTrack>();
+  for (const track of audio) if (track.musicItemId) byMusicId.set(track.musicItemId, track);
 
-  const bed: AudioTrack = {
-    id: existing?.id ?? globalThis.crypto.randomUUID(),
-    role: "bed",
-    musicItemId: bedMusicId,
-    mediaItemId: null,
-    offset: 0,
-    // A track parked halfway along the soundtrack lane kicks in halfway through.
-    startAt: Math.max(0, startAt),
-    duration: existing?.duration ?? null,
-    volume: existing?.volume ?? 0.8,
-    duck: existing?.duck ?? DEFAULT_BED_DUCK,
-    fadeIn: existing?.fadeIn ?? 1,
-    fadeOut: existing?.fadeOut ?? 2,
-    muted: existing?.muted ?? false,
-    loop: existing?.loop ?? false,
-  };
+  const queued: AudioTrack[] = [];
+  let cursor = Math.max(0, startAt);
 
-  if (index === -1) return [bed, ...audio];
-  const next = [...audio];
-  next[index] = bed;
-  return next;
+  chain.forEach((entry, index) => {
+    const existing = byMusicId.get(entry.musicItemId) ?? null;
+    const isLast = index === chain.length - 1;
+
+    // The bed keeps the start it was given until the needle moves; the rest
+    // follow the track in front of them, so the music runs without a seam.
+    const from =
+      index === 0 && existing?.role === "bed" && !resyncStart ? existing.startAt : cursor;
+
+    // A track with something after it stops when that one starts. The last runs
+    // to the end of the picture, which is what a null duration means.
+    const span = entry.seconds && entry.seconds > 0 ? round3(entry.seconds) : null;
+    const duration = isLast ? (existing?.duration ?? null) : span;
+
+    const track: AudioTrack = {
+      id: existing?.id ?? globalThis.crypto.randomUUID(),
+      role: index === 0 ? "bed" : "extra",
+      musicItemId: entry.musicItemId,
+      mediaItemId: null,
+      offset: existing?.offset ?? 0,
+      startAt: round3(Math.max(0, from)),
+      duration,
+      volume: existing?.volume ?? 0.8,
+      duck: existing?.duck ?? DEFAULT_BED_DUCK,
+      fadeIn: existing?.fadeIn ?? 1,
+      fadeOut: existing?.fadeOut ?? 2,
+      muted: existing?.muted ?? false,
+      loop: existing?.loop ?? false,
+    };
+
+    queued.push(existing && sameTrack(existing, track) ? existing : track);
+    cursor = track.startAt + (span ?? 0);
+  });
+
+  const next = [...queued, ...handPlaced];
+  const unchanged =
+    next.length === audio.length && next.every((track, i) => track === audio[i]);
+  return unchanged ? audio : next;
+}
+
+/** Three decimal places, so a chain of starts can't churn a revision. */
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+/**
+ * Whether the reconciled track says anything the existing one didn't. Identity
+ * is the contract `syncCut` writes against: an unchanged document is not
+ * written at all, so a track rebuilt into the same values has to come back as
+ * the same object or every vote would churn a revision.
+ */
+function sameTrack(a: AudioTrack, b: AudioTrack): boolean {
+  return (
+    a.role === b.role &&
+    a.musicItemId === b.musicItemId &&
+    a.mediaItemId === b.mediaItemId &&
+    a.offset === b.offset &&
+    a.startAt === b.startAt &&
+    a.duration === b.duration &&
+    a.volume === b.volume &&
+    a.duck === b.duck &&
+    a.fadeIn === b.fadeIn &&
+    a.fadeOut === b.fadeOut &&
+    a.muted === b.muted &&
+    a.loop === b.loop
+  );
 }

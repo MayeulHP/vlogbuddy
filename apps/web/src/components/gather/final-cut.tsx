@@ -110,7 +110,20 @@ export function FinalCut({
   // hand-placed on the bench and is only reported here, not editable.
   const bedTrack = timeline.audio.find((t) => t.role === "bed") ?? null;
   const bed = music.find((t) => bedTrack?.musicItemId === t.id) ?? null;
-  const extraCues = timeline.audio.filter((t) => t.role !== "bed").length;
+  /**
+   * The soundtrack as it plays: the bed first, then whatever the crew queued
+   * behind it. Read off the document rather than the selections, because the
+   * document is what the render will actually mix.
+   */
+  const soundtrack = timeline.audio
+    .flatMap((track) => {
+      const item = music.find((m) => m.id === track.musicItemId);
+      return item ? [{ track, item }] : [];
+    })
+    .sort((a, b) => a.track.startAt - b.track.startAt);
+  const extraCues = timeline.audio.filter(
+    (t) => t.role !== "bed" && !music.some((m) => m.id === t.musicItemId),
+  ).length;
   /** The stored fraction while it's settling, so the needle doesn't snap back. */
   const needlePos = needle ?? bed?.timelinePosition ?? 0;
   const pinned = media.filter((m) => m.cutOverride).length;
@@ -420,17 +433,39 @@ export function FinalCut({
                     className="absolute inset-x-0 top-1/2 h-px bg-[color:var(--hair-dark)]"
                   />
 
-                  {/* The run of the bed under the cut — dashed while there's no
-                      file behind it, because that plays as silence. */}
-                  <div
-                    aria-hidden
-                    className={cn(
-                      "absolute right-0 top-1/2 h-0 border-t border-signal-600",
-                      !bed.extractedAudioKey && "border-dashed",
-                      draggingNeedle && "border-t-2",
-                    )}
-                    style={{ left: `${needlePos * 100}%` }}
-                  />
+                  {/* One run per track, each ending where the next begins —
+                      dashed while there's no file behind it, because that
+                      plays as silence. */}
+                  {soundtrack.map(({ track, item }, index) => {
+                    const from = index === 0 ? needlePos : total > 0 ? track.startAt / total : 0;
+                    const nextStart = soundtrack[index + 1]?.track.startAt;
+                    const to =
+                      nextStart !== undefined && total > 0 ? Math.min(1, nextStart / total) : 1;
+                    return (
+                      <div key={track.id} aria-hidden>
+                        <div
+                          className={cn(
+                            "absolute top-1/2 h-0 border-t border-signal-600",
+                            !item.extractedAudioKey && "border-dashed",
+                            index === 0 && draggingNeedle && "border-t-2",
+                          )}
+                          style={{
+                            left: `${Math.min(from, to) * 100}%`,
+                            right: `${Math.max(0, 1 - to) * 100}%`,
+                          }}
+                        />
+                        {index > 0 && (
+                          <span
+                            className="timecode absolute top-1/2 -translate-y-1/2 bg-ink-900 pl-1 text-2xs text-ink-400"
+                            style={{ left: `${from * 100}%` }}
+                            title={item.title ?? item.url}
+                          >
+                            ♪{index + 1}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
 
                   <div
                     className={cn(
@@ -518,6 +553,11 @@ export function FinalCut({
                 {music.length > 0
                   ? "Running dry — put a track under the cut"
                   : "No sound yet"}
+              </span>
+            )}
+            {soundtrack.length > 1 && (
+              <span className="shrink-0 font-mono text-2xs uppercase tracking-label text-ink-500">
+                +{soundtrack.length - 1} after it
               </span>
             )}
             {extraCues > 0 && (

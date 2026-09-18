@@ -52,8 +52,15 @@ export function GatherView({
   const [reviewing, setReviewing] = useState<MediaItemView[] | null>(null);
 
   const footage = useMemo(() => media.filter((m) => m.kind !== "audio"), [media]);
-  // Never audio[0] — the bed is the one track with the role, wherever it sits.
-  const bedTrack = timeline.audio.find((t) => t.role === "bed") ?? null;
+  // Where each track of the soundtrack comes in, so the sheet can say so
+  // without knowing how the chain was built.
+  const startsAt = useMemo(
+    () =>
+      Object.fromEntries(
+        timeline.audio.flatMap((t) => (t.musicItemId ? [[t.musicItemId, t.startAt] as const] : [])),
+      ),
+    [timeline.audio],
+  );
   const reviewable = useMemo(() => footage.filter((m) => m.status === "ready"), [footage]);
   const unrated = useMemo(
     () => reviewable.filter((m) => m.reactions.mine === null),
@@ -160,8 +167,7 @@ export function GatherView({
           tiers={reactionTiers}
           memberId={memberId}
           crew={crew}
-          bedMusicId={bedTrack?.musicItemId ?? null}
-          bedStartAt={bedTrack?.startAt ?? null}
+          startsAt={startsAt}
           canEdit
         />
       </section>

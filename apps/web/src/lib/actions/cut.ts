@@ -133,6 +133,85 @@ export async function setMusicBedAction(slug: string, musicItemId: string | null
   }
 }
 
+/**
+ * Put a track in the film, or take it out again.
+ *
+ * The soundtrack is a queue, not a slot: what's in plays in the order it was
+ * added, each track picking up where the one before it ends. `syncCut` builds
+ * that chain — all this does is say which tracks are in it.
+ */
+export async function setMusicInCutAction(slug: string, musicItemId: string, inCut: boolean) {
+  try {
+    const session = await requireMemberBySlug(slug);
+    requireWorking(session);
+
+    await db.transaction(async (tx) => {
+      const [track] = await tx
+        .select({ id: musicItems.id })
+        .from(musicItems)
+        .where(and(eq(musicItems.id, musicItemId), eq(musicItems.vlogId, session.vlog.id)))
+        .limit(1);
+      if (!track) throw new Error("Track not found");
+
+      const chosen = await tx
+        .select()
+        .from(selections)
+        .where(and(eq(selections.vlogId, session.vlog.id), eq(selections.targetType, "music")));
+
+      if (inCut) {
+        // Choosing a track un-excludes it, so one tap always does what it looks like.
+        await tx
+          .update(musicItems)
+          .set({ cutOverride: null })
+          .where(eq(musicItems.id, musicItemId));
+
+        if (chosen.some((s) => s.targetId === musicItemId)) return;
+        await tx.insert(selections).values({
+          vlogId: session.vlog.id,
+          targetType: "music",
+          targetId: musicItemId,
+          orderIndex: chosen.reduce((next, s) => Math.max(next, s.orderIndex + 1), 0),
+          selectedById: session.member.id,
+        });
+        return;
+      }
+
+      await tx
+        .delete(selections)
+        .where(
+          and(
+            eq(selections.vlogId, session.vlog.id),
+            eq(selections.targetType, "music"),
+            eq(selections.targetId, musicItemId),
+          ),
+        );
+
+      /**
+       * Taking a track out has to stick. An empty queue falls back to the
+       * best-marked track — which is how a film gets music without anyone
+       * choosing, and which would otherwise hand the film straight back to the
+       * track just removed. Emptying the queue therefore means silence, and
+       * everything sits out until somebody picks again.
+       */
+      const emptied = chosen.filter((s) => s.targetId !== musicItemId).length === 0;
+      await tx
+        .update(musicItems)
+        .set({ cutOverride: "exclude" })
+        .where(
+          emptied
+            ? eq(musicItems.vlogId, session.vlog.id)
+            : and(eq(musicItems.id, musicItemId), eq(musicItems.vlogId, session.vlog.id)),
+        );
+    });
+
+    await syncCut(session.vlog.id, session.member.id);
+    revalidatePath(`/v/${slug}`);
+    return { ok: true as const };
+  } catch (err) {
+    return { ok: false as const, error: message(err, "Couldn't change the soundtrack") };
+  }
+}
+
 /** Persist a hand-arranged running order. */
 export async function reorderCutAction(slug: string, order: string[]) {
   try {
