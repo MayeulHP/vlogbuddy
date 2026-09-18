@@ -95,8 +95,7 @@ async function main() {
   const format = await getRenderSettings();
   console.log(
     `[worker] ready — render ${format.renderHeight}p@${format.renderFps} ` +
-      `(crf ${format.renderCrf}, ${format.renderPreset}; change it on /admin), ` +
-      `yt-audio ${e.ENABLE_YT_AUDIO ? "ENABLED" : "disabled"}`,
+      `(crf ${format.renderCrf}, ${format.renderPreset}; change it on /admin)`,
   );
 
   const shutdown = async (signal: string) => {

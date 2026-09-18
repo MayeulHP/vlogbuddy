@@ -10,8 +10,10 @@ export interface ParsedMusicLink {
 }
 
 /**
- * Recognises the shapes of YouTube / Spotify / Deezer links people actually
- * paste (share links, mobile links, with tracking params).
+ * Recognises the shapes of links people actually paste (share links, mobile
+ * links, with tracking params). Spotify and Deezer are still recognised even
+ * though only YouTube is accepted, so someone who pastes one gets told why
+ * rather than being told their link is unreadable.
  */
 export function parseMusicLink(raw: string): ParsedMusicLink | null {
   let url: URL;
@@ -101,7 +103,7 @@ export function oembedEndpoint(parsed: ParsedMusicLink): string | null {
   }
 }
 
-/** Only YouTube links can have audio extracted (and only when enabled). */
+/** Only YouTube audio can be extracted — the rest is DRM-protected. */
 export function canExtractAudio(source: MusicSource): boolean {
   return source === "youtube";
 }

@@ -284,23 +284,20 @@ twice is harmless. Whoever brought the footage, everyone can keep the originals.
 
 ## Music & the law
 
-Music links (YouTube / Spotify / Deezer) are used for **discovering, voting and
-placing** a track on the timeline. That part is just an embedded player and
-always works.
+The soundtrack lane takes **YouTube links**. Pasting one adds it for discovering,
+voting and placing, and the worker fetches its audio with `yt-dlp` so the chosen
+track is muxed into the rendered MP4. That's how the soundtrack gets into the
+film — there's no switch for it.
 
-Getting audio **into the rendered MP4** is a different matter:
+⚠️ **Downloading from YouTube violates YouTube's Terms of Service and the result
+is not redistributable.** This exists for private, personal, self-hosted use;
+running it is your call and your responsibility.
 
-- **Spotify and Deezer are DRM-protected.** Their audio cannot be extracted, and
-  VlogBuddy never tries.
-- **The blessed path is to upload an audio file.** Drop an MP3/WAV into the vlog
-  and pick it as the music bed in the editor. Legally clean, always works.
-- **`ENABLE_YT_AUDIO=true`** makes the worker pull audio from YouTube links with
-  `yt-dlp`. ⚠️ **This violates YouTube's Terms of Service and the result is not
-  redistributable.** It is **off by default** and provided only for private,
-  personal, self-hosted use. Enabling it is your call and your responsibility.
-
-With extraction off, a vlog still renders perfectly — it just uses uploaded audio
-or the clips' own sound.
+Spotify and Deezer links are **not accepted**: they're DRM-protected, so a track
+pasted from either would collect votes and then come out silent. Uploading an
+audio file is the other way in — drop an MP3/WAV into the vlog and pick it as the
+music bed in the editor. Legally clean, always works, and the only route for a
+track that isn't on YouTube.
 
 ---
 
@@ -318,7 +315,6 @@ See [`.env.example`](.env.example) for the annotated list. The ones that matter:
 | `MAX_UPLOAD_MB` | `2048` | Per-file upload limit. |
 | `RENDER_HEIGHT` / `RENDER_FPS` | `1080` / `30` | First-boot defaults only — the export format is set on `/admin` after that. |
 | `RENDER_CONCURRENCY` | `1` | Raise only if the host has CPU to spare. |
-| `ENABLE_YT_AUDIO` | `false` | See the warning above. |
 
 ---
 

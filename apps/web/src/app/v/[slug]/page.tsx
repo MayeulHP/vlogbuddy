@@ -103,7 +103,6 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
       publishedRender={published}
       immichConnection={immich ? publicConnection(immich) : null}
       shareUrl={`${env().PUBLIC_BASE_URL}/v/${vlog.shareSlug}`}
-      ytAudioEnabled={env().ENABLE_YT_AUDIO}
     />
   );
 }

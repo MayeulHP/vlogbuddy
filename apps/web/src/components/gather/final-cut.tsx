@@ -371,7 +371,7 @@ export function FinalCut({
             ) : (
               <span className="font-mono text-2xs uppercase tracking-label text-ink-500">
                 {music.length > 0
-                  ? "Running dry — pick a track in the sound lane"
+                  ? "Running dry — put a track under the cut"
                   : "No sound yet"}
               </span>
             )}

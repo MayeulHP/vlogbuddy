@@ -14,7 +14,6 @@ import { requireMemberBySlug } from "../session";
 import { emitToVlog } from "../realtime";
 import { syncCut } from "../cut";
 import { enqueueExtractAudio } from "../queue";
-import { env } from "../env";
 
 /** Best-effort metadata lookup — a missing title shouldn't block adding a track. */
 async function fetchOembed(endpoint: string) {
@@ -58,9 +57,18 @@ export async function addMusicAction(
 
     const link = parseMusicLink(parsed.data.url);
     if (!link) {
+      return { ok: false as const, error: "Couldn't read that link — paste a YouTube track URL" };
+    }
+
+    /**
+     * Only YouTube audio can reach the export. A Spotify or Deezer link would
+     * sit in the lane collecting votes and then be silent in the finished film,
+     * so it's kinder to say no at the door than to explain the silence later.
+     */
+    if (!canExtractAudio(link.source)) {
       return {
         ok: false as const,
-        error: "Couldn't read that link — paste a YouTube, Spotify or Deezer track URL",
+        error: "That one's locked down and would come out silent — paste a YouTube link instead",
       };
     }
 
@@ -81,9 +89,6 @@ export async function addMusicAction(
     const endpoint = oembedEndpoint(link);
     const meta = endpoint ? await fetchOembed(endpoint) : null;
 
-    // Only YouTube audio can be extracted, and only when explicitly enabled.
-    const willExtract = env().ENABLE_YT_AUDIO && canExtractAudio(link.source);
-
     const [item] = await db
       .insert(musicItems)
       .values({
@@ -97,7 +102,7 @@ export async function addMusicAction(
         artist: meta?.artist ?? null,
         thumbnailUrl: meta?.thumbnailUrl ?? null,
         timelinePosition: parsed.data.timelinePosition,
-        status: willExtract ? "pending" : "ready",
+        status: "pending",
       })
       .returning();
 
@@ -106,19 +111,17 @@ export async function addMusicAction(
      * file, so the bed is silent in the preview and dry in the render. Queue
      * the fetch here rather than waiting for someone to ask for it.
      */
-    if (willExtract) {
-      try {
-        await enqueueExtractAudio({ musicItemId: item.id, vlogId: session.vlog.id });
-      } catch (err) {
-        console.error("[music] could not queue audio extraction:", err);
-        await db
-          .update(musicItems)
-          .set({
-            status: "failed",
-            error: "Couldn't start fetching the sound — try again in a moment",
-          })
-          .where(eq(musicItems.id, item.id));
-      }
+    try {
+      await enqueueExtractAudio({ musicItemId: item.id, vlogId: session.vlog.id });
+    } catch (err) {
+      console.error("[music] could not queue audio extraction:", err);
+      await db
+        .update(musicItems)
+        .set({
+          status: "failed",
+          error: "Couldn't start fetching the sound — try again in a moment",
+        })
+        .where(eq(musicItems.id, item.id));
     }
 
     // The first track added becomes the music bed on its own.
@@ -197,21 +200,13 @@ export async function deleteMusicAction(slug: string, musicItemId: string) {
 }
 
 /**
- * Pull the audio for a chosen track so it can be muxed into the render.
- * YouTube only, and only when ENABLE_YT_AUDIO is set — see the warning in
- * .env.example about the ToS implications.
+ * Pull the audio for a chosen track so it can be muxed into the render. Runs
+ * on its own when a track is added; this is the retry for the ones that didn't
+ * come through. See the warning in .env.example about the ToS implications.
  */
 export async function requestAudioExtractionAction(slug: string, musicItemId: string) {
   try {
     const session = await requireMemberBySlug(slug);
-
-    if (!env().ENABLE_YT_AUDIO) {
-      return {
-        ok: false as const,
-        error:
-          "Audio extraction is disabled. Set ENABLE_YT_AUDIO=true to enable it, or upload an audio file instead.",
-      };
-    }
 
     const [item] = await db
       .select()
@@ -221,9 +216,10 @@ export async function requestAudioExtractionAction(slug: string, musicItemId: st
 
     if (!item) return { ok: false as const, error: "Track not found" };
     if (!canExtractAudio(item.source)) {
+      // Only reachable for tracks added before the door closed on these.
       return {
         ok: false as const,
-        error: `${item.source} audio can't be extracted — it's DRM protected. Upload an audio file for the export instead.`,
+        error: "That track is locked down — upload an audio file to use it in the film instead.",
       };
     }
     if (item.extractedAudioKey) return { ok: true as const, alreadyDone: true };

@@ -315,7 +315,7 @@ export const musicItems = pgTable(
     /** 0..1 placement along the rough timeline in the dump view. */
     timelinePosition: real("timeline_position").notNull().default(0.5),
 
-    /** Populated by yt-dlp when ENABLE_YT_AUDIO is on. */
+    /** Populated by yt-dlp once the worker has fetched the link's audio. */
     extractedAudioKey: text("extracted_audio_key"),
     audioDurationSeconds: doublePrecision("audio_duration_seconds"),
 

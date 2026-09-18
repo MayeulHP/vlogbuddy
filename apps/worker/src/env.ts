@@ -13,11 +13,6 @@ const envSchema = z.object({
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
 
-  ENABLE_YT_AUDIO: z
-    .string()
-    .default("false")
-    .transform((v) => v === "true" || v === "1"),
-
   RENDER_CONCURRENCY: z.coerce.number().default(1),
   /**
    * First-boot defaults only. Once the admin has saved the export format on

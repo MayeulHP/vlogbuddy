@@ -55,7 +55,7 @@ export const reactSchema = z.object({
 export type ReactInput = z.infer<typeof reactSchema>;
 
 export const addMusicSchema = z.object({
-  url: z.string().url("Paste a YouTube, Spotify or Deezer link"),
+  url: z.string().url("Paste a YouTube link"),
   /** 0..1 position along the rough timeline. */
   timelinePosition: z.number().min(0).max(1).default(0.5),
 });

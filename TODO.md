@@ -270,7 +270,6 @@ Still open:
 
 ## v2 — Music & licensing
 
-- [ ] Native Spotify / Deezer playback integration for preview (SDK-based).
 - [x] Beat detection to auto-cut clips on the beat.
 
 ## v2 — Capture & uploads

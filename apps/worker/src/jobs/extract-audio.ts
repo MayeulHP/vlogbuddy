@@ -19,21 +19,12 @@ export interface ExtractAudioJob {
  * final render.
  *
  * ⚠️  Downloading from YouTube violates their Terms of Service and the result
- * isn't redistributable. This exists for private, self-hosted, personal use and
- * is off unless ENABLE_YT_AUDIO=true. Spotify and Deezer are DRM-protected and
- * are never attempted — upload an audio file for those.
+ * isn't redistributable. This exists for private, self-hosted, personal use.
+ * The source guard below is for tracks added back when DRM-protected links were
+ * still accepted; nothing but YouTube gets in now.
  */
 export async function extractAudio(job: ExtractAudioJob): Promise<void> {
   const { musicItemId } = job;
-
-  if (!env().ENABLE_YT_AUDIO) {
-    console.log(`[extract-audio] skipped ${musicItemId} — ENABLE_YT_AUDIO is false`);
-    await db
-      .update(musicItems)
-      .set({ status: "ready", error: "Audio extraction is disabled on this instance" })
-      .where(eq(musicItems.id, musicItemId));
-    return;
-  }
 
   const [item] = await db.select().from(musicItems).where(eq(musicItems.id, musicItemId)).limit(1);
   if (!item) return;
@@ -43,7 +34,7 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
       .update(musicItems)
       .set({
         status: "ready",
-        error: `${item.source} is DRM-protected — upload an audio file to use it in the render`,
+        error: "That track is locked down — upload an audio file to use it in the film instead",
       })
       .where(eq(musicItems.id, item.id));
     await notifyMusicUpdated(item.vlogId, item.id);
@@ -111,6 +102,7 @@ function runYtDlp(url: string, workDir: string): Promise<void> {
       env().YTDLP_PATH,
       [
         "--no-playlist",
+        "-f", "bestaudio/best",
         "--extract-audio",
         "--audio-format", "m4a",
         "--audio-quality", "0",

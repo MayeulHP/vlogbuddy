@@ -18,8 +18,8 @@ WORKDIR /app
 # --- system tools -----------------------------------------------------------
 # Its own stage so a dependency bump never re-runs apk or pip.
 FROM base AS system
-# ffmpeg does the actual video work. yt-dlp is only used when ENABLE_YT_AUDIO
-# is true (see the warning in .env.example).
+# ffmpeg does the actual video work; yt-dlp fetches the audio behind a music
+# link (see the warning in .env.example).
 RUN apk add --no-cache ffmpeg python3 py3-pip font-noto \
     && pip3 install --break-system-packages --no-cache-dir yt-dlp
 

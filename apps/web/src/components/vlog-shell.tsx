@@ -43,7 +43,6 @@ export interface VlogShellProps {
   latestRender: RenderJob | null;
   publishedRender: (RenderJob & { url: string; downloadUrl: string }) | null;
   shareUrl: string;
-  ytAudioEnabled: boolean;
   immichConnection: PublicImmichConnection | null;
 }
 
@@ -172,7 +171,6 @@ export function VlogShell(props: VlogShellProps) {
             memberId={member.id}
             crew={props.members.length}
             scoreThreshold={vlog.scoreThreshold}
-            ytAudioEnabled={props.ytAudioEnabled}
             immichConnection={props.immichConnection}
             socket={socket}
           />

@@ -8,7 +8,7 @@ import type { PublicImmichConnection } from "@/lib/immich";
 import type { VlogSocket } from "@/hooks/use-vlog-socket";
 import { UploadZone } from "../dump/upload-zone";
 import { DumpVoteTimeline } from "../dump/dump-vote-timeline";
-import { MusicLane } from "../dump/music-lane";
+import { CueSheet } from "../dump/cue-sheet";
 import { Lightbox } from "../dump/lightbox";
 import { EmptyFrames, Perfs, SectionHead } from "../brand";
 import { FinalCut } from "./final-cut";
@@ -32,7 +32,6 @@ export function GatherView({
   memberId,
   crew,
   scoreThreshold,
-  ytAudioEnabled,
   immichConnection,
   socket,
 }: {
@@ -45,7 +44,6 @@ export function GatherView({
   /** How many people are on the crew — votes are read against this, not a score. */
   crew: number;
   scoreThreshold: number;
-  ytAudioEnabled: boolean;
   immichConnection: PublicImmichConnection | null;
   socket: VlogSocket | null;
 }) {
@@ -54,6 +52,8 @@ export function GatherView({
   const [reviewing, setReviewing] = useState<MediaItemView[] | null>(null);
 
   const footage = useMemo(() => media.filter((m) => m.kind !== "audio"), [media]);
+  // Never audio[0] — the bed is the one track with the role, wherever it sits.
+  const bedTrack = timeline.audio.find((t) => t.role === "bed") ?? null;
   const reviewable = useMemo(() => footage.filter((m) => m.status === "ready"), [footage]);
   const unrated = useMemo(
     () => reviewable.filter((m) => m.reactions.mine === null),
@@ -154,23 +154,16 @@ export function GatherView({
 
       {/* ---------- sound ---------- */}
       <section>
-        <MusicLane
+        <CueSheet
           slug={slug}
           music={music}
           tiers={reactionTiers}
           memberId={memberId}
           crew={crew}
-          mediaCount={Math.max(footage.length, 1)}
-          bedMusicId={timeline.audio.find((t) => t.role === "bed")?.musicItemId ?? null}
+          bedMusicId={bedTrack?.musicItemId ?? null}
+          bedStartAt={bedTrack?.startAt ?? null}
           canEdit
         />
-
-        {!ytAudioEnabled && music.length > 0 && (
-          <p className="notice-tape mt-3">
-            Streaming links set the vibe, but they can&apos;t be baked into the render — upload an
-            audio file for the finished film.
-          </p>
-        )}
       </section>
 
       {/* ---------- 04 · SHORTLIST ---------- */}
