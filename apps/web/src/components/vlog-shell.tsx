@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RenderJob } from "@vlogbuddy/db";
 import {
   VLOG_STATES,
@@ -284,18 +284,30 @@ function useTabPreference(slug: string, state: VlogState) {
   return [tab, choose] as const;
 }
 
-/** Coalesces bursts of realtime events into a single router refresh. */
+/**
+ * Coalesces bursts of realtime events into a single router refresh.
+ *
+ * The timer lives in a ref, not in state: rescheduling it isn't something the
+ * page renders, and doing it inside a state updater made the updater impure —
+ * React is free to call one twice, and in development it does, which left a
+ * stray timer behind on every event and fired the refresh twice.
+ */
 function useDebouncedRefresh(fn: () => void, delay: number) {
-  const [timer, setTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef(fn);
+  latest.current = fn;
 
-  useEffect(() => () => { if (timer) clearTimeout(timer); }, [timer]);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
 
   return useCallback(() => {
-    setTimer((prev) => {
-      if (prev) clearTimeout(prev);
-      return setTimeout(() => fn(), delay);
-    });
-  }, [fn, delay]);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => latest.current(), delay);
+  }, [delay]);
 }
 
 export { VLOG_STATES, VLOG_STATE_LABELS };

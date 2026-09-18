@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { db, eq, mediaItems } from "@vlogbuddy/db";
+import { and, asc, db, eq, mediaItems, members } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, downloadToFile, uploadFile } from "../storage";
 import {
@@ -16,7 +16,7 @@ import {
 } from "../ffmpeg";
 import { analyzeBeats } from "../beats";
 import { readPhotoExif } from "../exif";
-import { notifyMediaUpdated } from "../notify";
+import { notifyMediaUpdated, requestCutResync } from "../notify";
 
 export interface ProcessMediaJob {
   mediaItemId: string;
@@ -195,6 +195,23 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
       capturedAt: capturedAt ? capturedAt.toISOString() : null,
     });
 
+    /**
+     * The cut was built before any of this was known.
+     *
+     * An upload joins the film the moment it is confirmed, but at that point
+     * nobody has opened the file: no duration, so the auto-cut has nothing to
+     * budget and leaves the out-point open, and no capture time, so it can't
+     * tell which day or which scene the shot belongs to. Now that probing has
+     * landed, the engine has to look again — otherwise the running time and
+     * the scene breaks stay wrong until some unrelated vote happens to
+     * rebuild the document.
+     *
+     * The engine lives in the web app, so this goes over the same NOTIFY the
+     * Immich import uses, and coalesced: see `requestCutResync`.
+     */
+    const attributeTo = item.uploaderId ?? (await creatorOf(item.vlogId));
+    if (attributeTo) requestCutResync(item.vlogId, attributeTo);
+
     console.log(`[process-media] ${item.id} ready (${item.kind})`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -253,6 +270,21 @@ function isAppleStill(contentType: string): boolean {
 function needsDisplayProxy(contentType: string, info: ProbeResult | null): boolean {
   if (!BROWSER_SAFE_IMAGE_TYPES.has(contentType)) return true;
   return Math.max(info?.width ?? 0, info?.height ?? 0) > PHOTO_PROXY_MAX_EDGE;
+}
+
+/**
+ * Somebody to sign the resync with. The uploader is the obvious answer, but
+ * the column goes null when a member is removed, and a re-cut with nobody's
+ * name on it would fail the foreign key rather than just look anonymous.
+ */
+async function creatorOf(vlogId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: members.id })
+    .from(members)
+    .where(and(eq(members.vlogId, vlogId), eq(members.role, "creator")))
+    .orderBy(asc(members.createdAt))
+    .limit(1);
+  return row?.id ?? null;
 }
 
 function hashFile(filePath: string): Promise<string> {

@@ -72,15 +72,20 @@ export async function runDirectorAction(slug: string, input: unknown = {}) {
         return row;
       });
 
-      // Every open bench replays the same ops, so they converge before the
-      // sync below lands on top with the auto-cut's answer.
-      for (const op of ops) {
-        emitToVlog(session.vlog.id, "timeline:op", {
-          op,
-          revision: saved.revision,
-          byMemberId: session.member.id,
-        });
-      }
+      // The whole document rather than the ops that made it.
+      //
+      // `timeline:op` carries `byMemberId`, and every bench ignores its own —
+      // which is right for an edit the bench applied optimistically before
+      // sending, and wrong here, because this panel goes through a server
+      // action and has applied nothing. The sender was therefore the one
+      // browser in the room that never saw the change. Turning the auto-cut
+      // *off* made that visible: it is the one setting whose new value leaves
+      // the cut untouched, so the `syncCut` below writes nothing, broadcasts
+      // no `timeline:sync`, and the checkbox sprang back.
+      emitToVlog(session.vlog.id, "timeline:sync", {
+        timeline: saved.doc,
+        revision: saved.revision,
+      });
     }
 
     const result = await syncCut(session.vlog.id, session.member.id);

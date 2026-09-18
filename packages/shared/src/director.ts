@@ -32,7 +32,8 @@ import type {
  *
  *   - Screen time is a *budget*, not whatever the camera happened to record.
  *     A shot earns its length from the crew's marks, and gives it back when it
- *     stops earning it.
+ *     stops earning it. How long it was filmed for decides how far into that
+ *     budget it can reach, never how big the budget is — see `LENGTH_SHARE`.
  *   - Cut within a scene, dissolve between them. A dissolve has meant "time
  *     passed" since the 1920s, and capture timestamps hand us the scene breaks
  *     for free — as do the coordinates, when the crew has moved on.
@@ -83,6 +84,30 @@ const BUDGET: Record<Pace, Record<RankTier, number>> = {
   standard: { keep: 2.6, strong: 4.0, hero: 6.5 },
   relaxed: { keep: 3.8, strong: 5.5, hero: 9.0 },
 };
+
+/**
+ * How much of itself a long shot earns back, and how far past its tier's
+ * budget that can carry it.
+ *
+ * The tier budget used to be the whole sum, which meant length had no say at
+ * all: a forty-second shot somebody stood and held and a three-second glance
+ * both came out at 2.6s, and an unvoted pile — where every item is in the
+ * `keep` band by definition — rendered as a flick-book. Nobody who filmed for
+ * forty seconds meant two.
+ *
+ * So the source gets a say of its own, in the only shape that doesn't
+ * undermine the feature: a share of what's usable in the file, never less than
+ * the tier's budget and never more than a fixed multiple of it. Both ends move
+ * with the marks — the share *and* the ceiling are read off the tier — so a
+ * promotion still lengthens a shot at every source length rather than only in
+ * the stretch where the two happen not to collide. Length decides how far into
+ * the headroom the marks opened a shot can reach, and nothing more.
+ *
+ * A shot short enough that its tier is already asking for most of it is
+ * untouched: the share only bites past about 16 seconds at the standard pace.
+ */
+const LENGTH_SHARE: Record<RankTier, number> = { keep: 0.18, strong: 0.28, hero: 0.4 };
+const LENGTH_CEILING = 2.4;
 
 /**
  * Stills read faster than footage, so a photo gets less than its tier's budget
@@ -479,6 +504,38 @@ function reconcileScenes(doc: TimelineDoc, runs: SceneBreak[]): Scene[] {
 
 // --- Timing -----------------------------------------------------------------
 
+/**
+ * The stretch of a source worth using: the raise at the head and the lowering
+ * at the tail trimmed off.
+ *
+ * Shared by the budget and the window on purpose. The budget asks how much of
+ * a shot is worth keeping and the window goes and takes it; if the two
+ * disagreed about how much footage there is, a shot could be granted seconds
+ * that don't exist.
+ */
+function usableSpan(sourceDuration: number): { start: number; end: number; span: number } {
+  const head = Math.min(HEAD_TRIM, sourceDuration * TRIM_FRACTION);
+  const tail = Math.min(TAIL_TRIM, sourceDuration * TRIM_FRACTION);
+  const end = sourceDuration - tail;
+  return { start: head, end, span: end - head };
+}
+
+/**
+ * The extra seconds a shot's own length earns it, on top of what its tier
+ * bought. Zero for anything we don't have a length for — a source still being
+ * probed gets the plain budget and is re-timed on the sync after the probe.
+ */
+function lengthAllowance(
+  budget: number,
+  tier: RankTier,
+  sourceSeconds: number | null | undefined,
+): number {
+  if (sourceSeconds == null || !Number.isFinite(sourceSeconds) || sourceSeconds <= 0) return 0;
+  const { span } = usableSpan(sourceSeconds);
+  if (span < MIN_HOLD) return 0;
+  return Math.min(span * LENGTH_SHARE[tier], budget * LENGTH_CEILING);
+}
+
 /** How long a shot should hold, before the source is consulted. */
 export function holdFor(opts: {
   kind: "photo" | "video";
@@ -488,10 +545,24 @@ export function holdFor(opts: {
   jitter: number;
   /** Whether this still is going to move. Ignored for video. */
   moving?: boolean;
+  /**
+   * How long the source file runs, where we know. Video only — a still has no
+   * recorded length to argue from, which is why its caps are absolute.
+   *
+   * Measured in *source* seconds against a budget in screen seconds. They are
+   * the same thing at 1×, and a retimed shot has had its timing taken off the
+   * auto-cut anyway (`speed` clears the `timing` flag), so the two only ever
+   * meet again after an explicit re-cut — where trading source span for screen
+   * time at the shot's own rate is the answer you'd want.
+   */
+  sourceSeconds?: number | null;
 }): number {
   const photo = photoLimits(opts.moving ?? false);
-  let hold = BUDGET[opts.pace][opts.tier];
-  if (opts.kind === "photo") hold = Math.min(hold * photo.factor, photo.max);
+  const budget = BUDGET[opts.pace][opts.tier];
+  let hold =
+    opts.kind === "photo"
+      ? Math.min(budget * photo.factor, photo.max)
+      : Math.max(budget, lengthAllowance(budget, opts.tier, opts.sourceSeconds));
   hold *= 1 + opts.jitter * JITTER;
   if (opts.isLast) hold += LAST_CLIP_BONUS;
   return round(clamp(hold, MIN_HOLD, opts.kind === "photo" ? photo.max : MAX_HOLD));
@@ -513,11 +584,7 @@ export function trimWindow(
     return { trimStart: 0, trimEnd: null, duration: hold };
   }
 
-  const head = Math.min(HEAD_TRIM, sourceDuration * TRIM_FRACTION);
-  const tail = Math.min(TAIL_TRIM, sourceDuration * TRIM_FRACTION);
-  const usableStart = head;
-  const usableEnd = sourceDuration - tail;
-  const usable = usableEnd - usableStart;
+  const { start: usableStart, end: usableEnd, span: usable } = usableSpan(sourceDuration);
 
   if (usable < MIN_HOLD) {
     const duration = round(sourceDuration);
@@ -693,6 +760,7 @@ function planClip(
     isLast: index === cut.length - 1,
     jitter: jitterFor(entry.mediaItemId),
     moving,
+    sourceSeconds: entry.durationSeconds,
   });
 
   // The beat grid quantises the budget; it never sets it. A shot still gets
@@ -810,6 +878,13 @@ function applyToClip(clip: Clip, plan: Plan): Clip {
  * the write — which is what lets this be called after every single vote.
  */
 export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc {
+  // Switched off, and off means off: not an undo. Shots the auto-cut had
+  // already timed keep the length they have — rewriting them back to full
+  // source length would be the same overruling-a-person move in reverse, and
+  // would destroy a cut somebody was happy with the instant they flicked the
+  // switch to see what it did. What changes is the future: `defaultClipFor`
+  // gives a shot arriving from the vote its whole recorded length, and nothing
+  // here comes along afterwards to cut it down.
   if (!input.settings.enabled) return doc;
   if (doc.clips.length === 0 || doc.clips.length !== input.cut.length) return doc;
   // Nothing in this film is ours any more. Stated outright rather than left to

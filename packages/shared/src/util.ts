@@ -62,6 +62,9 @@ export function estimatedClipDuration(
     pace,
     isLast: false,
     jitter: opts.mediaItemId ? jitterFor(opts.mediaItemId) : 0,
+    // The budget reads the source's own length, so the floor has to hand it
+    // over or it would quote a long shot at a short shot's screen time.
+    sourceSeconds: durationSeconds ?? null,
   });
 
   if (kind === "photo") return hold;

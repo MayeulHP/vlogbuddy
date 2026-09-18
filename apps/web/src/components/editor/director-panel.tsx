@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   PACE_BLURBS,
   PACE_LABELS,
   PACE_PRESETS,
+  type DirectorSettings,
   type Pace,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
@@ -34,7 +35,28 @@ export function DirectorPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const director = timeline.director;
+  /**
+   * What we've asked for and not yet seen come back.
+   *
+   * These controls go through a server action rather than the socket, so
+   * nothing applies them locally the way `dispatch` does on the bench — the
+   * switch would otherwise sit at its old value for a whole round trip and
+   * look like it hadn't taken. Each key is dropped the moment the document
+   * agrees with it, so the server still has the last word.
+   */
+  const [sent, setSent] = useState<Partial<DirectorSettings>>({});
+  const stored = timeline.director;
+
+  useEffect(() => {
+    setSent((prev) => {
+      const waiting = Object.fromEntries(
+        Object.entries(prev).filter(([key, value]) => stored[key as keyof DirectorSettings] !== value),
+      );
+      return Object.keys(waiting).length === Object.keys(prev).length ? prev : waiting;
+    });
+  }, [stored]);
+
+  const director = { ...stored, ...sent };
 
   // The scenes the document carries — the same ones the floor bands the rough
   // cut with and the ruler marks on the strip, so nobody has to wonder whether
@@ -43,12 +65,15 @@ export function DirectorPanel({
   const handCut = timeline.clips.filter((c) => c.auto.length === 0).length;
   const named = scenes.filter((s) => !s.auto.includes("name")).length;
 
-  function run(input: Parameters<typeof runDirectorAction>[1]) {
+  function run(input: { settings?: Partial<DirectorSettings>; recut?: boolean }) {
     setError(null);
+    if (input.settings) setSent((prev) => ({ ...prev, ...input.settings }));
     startTransition(async () => {
       const result = await runDirectorAction(slug, input);
-      if (!result.ok) setError(result.error);
-      else setConfirming(false);
+      if (!result.ok) {
+        setError(result.error);
+        setSent({}); // it didn't take; show what the document actually says.
+      } else setConfirming(false);
     });
   }
 
@@ -136,7 +161,8 @@ export function DirectorPanel({
           <span>
             <span className="block text-[13px] text-paper-100">Let the vote set the lengths</span>
             <span className="block text-2xs leading-relaxed text-ink-400">
-              Turn this off and new shots arrive at their full recorded length.
+              Turn this off and new shots arrive at their full recorded length. Shots already
+              in the cut keep the length they have — trim them yourself, or turn this back on.
             </span>
           </span>
         </label>

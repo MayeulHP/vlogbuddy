@@ -7,7 +7,7 @@ import { env } from "../env";
 import { buildStorageKey, uploadFile } from "../storage";
 import { probe } from "../ffmpeg";
 import { analyzeBeats } from "../beats";
-import { notifyMusicUpdated } from "../notify";
+import { notifyMusicUpdated, requestCutResync } from "../notify";
 
 export interface ExtractAudioJob {
   musicItemId: string;
@@ -80,6 +80,13 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
     // The editor holds a presigned URL that didn't exist a moment ago, so tell
     // the room to re-read the track rather than making someone reload.
     await notifyMusicUpdated(item.vlogId, item.id);
+
+    /**
+     * The beats landed with it, and they're no use sitting in the row: the
+     * auto-cut snaps its cuts to them, and the document it snapped was built
+     * before this track had a pulse. Same coalescing as a processed upload.
+     */
+    if (item.addedById) requestCutResync(item.vlogId, item.addedById);
 
     console.log(`[extract-audio] ${item.id} ready`);
   } catch (err) {

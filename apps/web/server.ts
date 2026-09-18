@@ -25,6 +25,45 @@ import crypto from "node:crypto";
 const NOTIFY_CHANNEL = "vlogbuddy_events";
 
 /**
+ * One cut rebuild per vlog at a time.
+ *
+ * `syncCut` reads the timeline document, works out the next one and writes it
+ * back with `revision + 1`; two of those interleaved would both read the same
+ * revision and the slower one would land on top of the faster. That used to be
+ * hypothetical — only a finished Immich import asked for a resync — but every
+ * processed upload asks now, and an import is a stream of both. A request that
+ * arrives mid-rebuild is remembered rather than dropped, because it is the one
+ * carrying the durations the running rebuild hasn't read yet.
+ */
+const resyncing = new Map<string, { queued: string | null }>();
+
+function resyncCut(io: SocketServer, vlogId: string, memberId: string) {
+  const active = resyncing.get(vlogId);
+  if (active) {
+    active.queued = memberId;
+    return;
+  }
+
+  const entry: { queued: string | null } = { queued: null };
+  resyncing.set(vlogId, entry);
+
+  void (async () => {
+    let member: string | null = memberId;
+    while (member) {
+      try {
+        await syncCut(vlogId, member, {
+          onTimelineSync: (sync) => io.to(roomForVlog(vlogId)).emit("timeline:sync", sync),
+        });
+      } catch (err) {
+        console.error("[bridge] cut resync failed:", err);
+      }
+      member = entry.queued;
+      entry.queued = null;
+    }
+  })().finally(() => resyncing.delete(vlogId));
+}
+
+/**
  * The worker runs in its own process, so it publishes events on a Postgres
  * NOTIFY channel. We relay them into the right Socket.IO room here — that's how
  * "your video finished processing" and render progress reach the browser.
@@ -47,12 +86,7 @@ async function bridgeWorkerEvents(io: SocketServer) {
          */
         if (event.type === "cut:resync") {
           const { memberId } = event.payload as { memberId: string };
-          void syncCut(event.vlogId, memberId, {
-            onTimelineSync: (sync) =>
-              io.to(roomForVlog(event.vlogId)).emit("timeline:sync", sync),
-          }).catch((err) => {
-            console.error("[bridge] cut resync failed:", err);
-          });
+          resyncCut(io, event.vlogId, memberId);
           return;
         }
 
