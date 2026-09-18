@@ -176,13 +176,22 @@ export function DirectorPanel({
                   : "This puts every shot back to the length the crew's marks suggest. There's no undo."}
                 {named > 0 &&
                   ` Your scene name${named === 1 ? "" : "s"} go${named === 1 ? "es" : ""} back to the date too.`}
+                {!director.enabled && " The vote goes back to setting the lengths, too."}
               </p>
               <div className="flex gap-2">
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => run({ recut: true })}
-                  className="flex-1 border border-rust-400 bg-rust-400 px-3 py-2 text-xs text-ink-900 disabled:opacity-50"
+                  /**
+                   * Starting again *is* the auto-cut, so it brings the switch
+                   * back with it. Re-arming the flags while the director is
+                   * off re-arms nothing: it returns the document untouched,
+                   * and the button looked broken because it was.
+                   */
+                  onClick={() =>
+                    run(director.enabled ? { recut: true } : { recut: true, settings: { enabled: true } })
+                  }
+                  className="btn-danger flex-1"
                 >
                   {pending ? "Re-cutting…" : "Yes, start again"}
                 </button>
@@ -222,7 +231,7 @@ export function DirectorPanel({
           )}
         </div>
 
-        {error && <p className="text-2xs text-rust-400">{error}</p>}
+        {error && <p className="text-2xs text-signal-400">{error}</p>}
       </div>
     </section>
   );
