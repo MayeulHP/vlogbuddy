@@ -191,6 +191,8 @@ export function PreviewPlayer({
   onTimeChange,
   selectedClipId,
   onSelectClip,
+  playing,
+  onPlayingChange: setPlaying,
 }: {
   timeline: TimelineDoc;
   mediaById: Map<string, MediaItemView>;
@@ -200,8 +202,15 @@ export function PreviewPlayer({
   onTimeChange: (t: number) => void;
   selectedClipId: string | null;
   onSelectClip: (id: string) => void;
+  /**
+   * Playback is held by the bench, not here: Space has to reach it from
+   * wherever focus happens to be, and a transport that owns its own state
+   * can't be told anything from outside.
+   */
+  playing: boolean;
+  onPlayingChange: (playing: boolean) => void;
 }) {
-  const [playing, setPlaying] = useState(false);
+
   const rafRef = useRef<number | null>(null);
   /**
    * Every <audio> in the stack, so the play button can start them from inside

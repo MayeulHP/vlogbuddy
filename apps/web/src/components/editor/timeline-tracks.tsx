@@ -57,6 +57,7 @@ export function TimelineTracks({
   selection,
   onSelect,
   onDispatch,
+  onReorderClip,
   playheadTime,
   onSeek,
   onBackToGather,
@@ -69,6 +70,12 @@ export function TimelineTracks({
   selection: Selection;
   onSelect: (selection: Selection) => void;
   onDispatch: (op: TimelineOp) => void;
+  /**
+   * Dropping a shot somewhere else in the order is the floor's business, not
+   * the document's: `syncCut` rebuilds the order from the `selections` table,
+   * so a `clip.move` here survived exactly until the next vote.
+   */
+  onReorderClip: (clipId: string, toIndex: number) => void;
   playheadTime: number;
   onSeek: (t: number) => void;
   onBackToGather?: () => void;
@@ -498,7 +505,7 @@ export function TimelineTracks({
                   const from = timeline.clips.findIndex((c) => c.id === draggingClipId);
                   const to = dropIndex > from ? dropIndex - 1 : dropIndex;
                   if (from !== -1 && to !== from) {
-                    onDispatch({ type: "clip.move", clipId: draggingClipId, toIndex: to });
+                    onReorderClip(draggingClipId, to);
                   }
                 }
                 setDraggingClipId(null);

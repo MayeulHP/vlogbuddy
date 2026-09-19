@@ -53,12 +53,21 @@ export function ClipInspector({
   index,
   total,
   onDispatch,
+  onReorder,
+  onLiftOut,
 }: {
   clip: Clip;
   media: MediaItemView | null;
   index: number;
   total: number;
   onDispatch: (op: TimelineOp) => void;
+  /**
+   * Where this shot sits in the running order, and whether it's in at all,
+   * are the floor's to answer — `syncCut` rebuilds both from the selections
+   * table, so a change made to the document here is undone by the next vote.
+   */
+  onReorder: (toIndex: number) => void;
+  onLiftOut: () => void;
 }) {
   const sourceDuration = media?.durationSeconds ?? null;
   const effective = clipDuration(clip, sourceDuration);
@@ -105,7 +114,7 @@ export function ClipInspector({
         {total > 1 && (
           <div className="mt-2 flex items-center gap-1.5">
             <button
-              onClick={() => onDispatch({ type: "clip.move", clipId: clip.id, toIndex: index - 1 })}
+              onClick={() => onReorder(index - 1)}
               disabled={index === 0}
               className="btn-outline-dark px-2"
               title="Move this shot earlier"
@@ -113,7 +122,7 @@ export function ClipInspector({
               ◀ Earlier
             </button>
             <button
-              onClick={() => onDispatch({ type: "clip.move", clipId: clip.id, toIndex: index + 1 })}
+              onClick={() => onReorder(index + 1)}
               disabled={index === total - 1}
               className="btn-outline-dark px-2"
               title="Move this shot later"
@@ -503,7 +512,7 @@ export function ClipInspector({
         </div>
 
         <button
-          onClick={() => onDispatch({ type: "clip.remove", clipId: clip.id })}
+          onClick={onLiftOut}
           className="btn border-signal-700/50 bg-signal-900/30 w-full text-signal-300 hover:border-signal-500 hover:bg-signal-900/60"
         >
           Lift this shot out

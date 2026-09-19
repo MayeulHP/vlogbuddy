@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
   applyTimelineOp,
+  clipSpeed,
+  clipStartTimes,
   formatDuration,
   timelineDuration,
   type AudioTrack,
@@ -11,7 +13,7 @@ import {
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { startRenderAction } from "@/lib/actions/timeline";
-import { setMusicBedAction } from "@/lib/actions/cut";
+import { reorderCutAction, setCutOverrideAction, setMusicBedAction } from "@/lib/actions/cut";
 import { useSocketEvent, type VlogSocket } from "@/hooks/use-vlog-socket";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ClipInspector } from "./clip-inspector";
@@ -23,6 +25,8 @@ import { TimelineTracks, audioTrackLabel } from "./timeline-tracks";
 import { PreviewPlayer } from "./preview-player";
 import { NO_SELECTION, type Selection } from "./selection";
 import { PanelEmpty, PanelTabs, type PanelTab } from "./panel-tabs";
+import { KEYMAP, KEY_SECTIONS, type KeyAction } from "./keymap";
+import { useEditorKeys } from "./use-editor-keys";
 import { cn } from "@/lib/cn";
 
 interface EditorViewProps {
@@ -82,6 +86,8 @@ export function EditorView({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [playheadTime, setPlayheadTime] = useState(0);
   const [panelTab, setPanelTab] = useState<PanelTab>("shot");
+  const [playing, setPlaying] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
   const [, startTransition] = useTransition();
@@ -221,6 +227,8 @@ export function EditorView({
         index={timeline.clips.findIndex((c) => c.id === selected.id)}
         total={timeline.clips.length}
         onDispatch={dispatch}
+        onReorder={(toIndex) => reorderClip(selected.id, toIndex)}
+        onLiftOut={() => liftClipOut(selected.id)}
       />
     ) : (
       <PanelEmpty>Pick a shot on the strip to trim it, retime it, or write over it.</PanelEmpty>
@@ -253,6 +261,195 @@ export function EditorView({
     ) : null;
 
   /** The phone's sheet shows the thing you just tapped, not the whole rack. */
+  const clipStarts = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
+
+  /** A frame, near enough — the render's fps isn't on the client. */
+  const FRAME = 1 / 30;
+  /** The least a shot can be left holding after a trim. */
+  const MIN_HOLD = 0.2;
+  const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
+  /**
+   * Reordering and lifting out go through the floor's own actions rather than
+   * the document.
+   *
+   * `syncCut` rebuilds the running order from the `selections` table and keys
+   * clips by their media, so a `clip.move` from the bench was quietly undone
+   * by the next vote, and a `clip.remove` came back at the next sync as a
+   * fresh clip with its trims and titles gone. The floor has always done this
+   * properly; the bench just wasn't asking the same way.
+   */
+  function reorderClip(clipId: string, toIndex: number) {
+    const from = timeline.clips.findIndex((c) => c.id === clipId);
+    const to = Math.max(0, Math.min(timeline.clips.length - 1, toIndex));
+    if (from === -1 || from === to) return;
+    const ids = timeline.clips.map((c) => c.mediaItemId);
+    const [moved] = ids.splice(from, 1);
+    ids.splice(to, 0, moved);
+    startTransition(async () => {
+      const result = await reorderCutAction(slug, ids);
+      if (!result.ok) setError(result.error);
+    });
+  }
+
+  function liftClipOut(clipId: string) {
+    const index = timeline.clips.findIndex((c) => c.id === clipId);
+    const clip = timeline.clips[index];
+    if (!clip) return;
+    // Land on the next shot, or the one before it at the end of the strip —
+    // never on nothing, which would close the panel you're working in.
+    const next = timeline.clips[index + 1] ?? timeline.clips[index - 1] ?? null;
+    choose(next ? { kind: "clip", id: next.id } : NO_SELECTION);
+    startTransition(async () => {
+      const result = await setCutOverrideAction(slug, {
+        targetType: "media",
+        targetId: clip.mediaItemId,
+        override: "exclude",
+      });
+      if (!result.ok) setError(result.error);
+    });
+  }
+
+  /** Start or end the selected shot where the playhead is standing. */
+  function markClip(edge: "in" | "out") {
+    if (selection.kind !== "clip") return;
+    const clip = timeline.clips.find((c) => c.id === selection.id);
+    if (!clip || clip.kind === "photo") return;
+    const offset = (playheadTime - (clipStarts[clip.id] ?? 0)) * clipSpeed(clip);
+    if (offset <= 0) return;
+    const at = clip.trimStart + offset;
+    const sourceEnd = clip.trimEnd ?? durations[clip.mediaItemId] ?? null;
+    if (edge === "in") {
+      if (sourceEnd !== null && at > sourceEnd - MIN_HOLD) return;
+      dispatch({ type: "clip.update", clipId: clip.id, patch: { trimStart: round3(at) } });
+    } else {
+      if (at < clip.trimStart + MIN_HOLD) return;
+      dispatch({ type: "clip.update", clipId: clip.id, patch: { trimEnd: round3(at) } });
+    }
+  }
+
+  function stepSelection(delta: -1 | 1) {
+    if (timeline.clips.length === 0) return;
+    const index =
+      selection.kind === "clip" ? timeline.clips.findIndex((c) => c.id === selection.id) : -1;
+    const at =
+      index === -1
+        ? delta === 1
+          ? 0
+          : timeline.clips.length - 1
+        : Math.max(0, Math.min(timeline.clips.length - 1, index + delta));
+    const clip = timeline.clips[at];
+    if (!clip) return;
+    choose({ kind: "clip", id: clip.id });
+    setPlayheadTime(clipStarts[clip.id] ?? 0);
+  }
+
+  function nudgeSelected(seconds: number) {
+    if (selection.kind === "layer" && selected && "opacity" in selected) {
+      dispatch({
+        type: "layer.update",
+        layerId: selected.id,
+        patch: { startAt: Math.max(0, round3(selected.startAt + seconds)) },
+      });
+    } else if (selection.kind === "audio" && selected && "role" in selected) {
+      // The bed's start belongs to the floor's soundtrack lane, not to a key.
+      if (selected.role === "bed") return;
+      dispatch({
+        type: "audio.update",
+        trackId: selected.id,
+        patch: { startAt: Math.max(0, round3(selected.startAt + seconds)) },
+      });
+    }
+  }
+
+  const onKeyAction = (action: KeyAction, event: KeyboardEvent) => {
+    const big = event.shiftKey;
+    const step = big ? 1 : FRAME;
+    const index =
+      selection.kind === "clip" ? timeline.clips.findIndex((c) => c.id === selection.id) : -1;
+
+    switch (action) {
+      case "play":
+        setPlaying((p) => !p);
+        break;
+      case "stepBack":
+        setPlayheadTime(Math.max(0, playheadTime - step));
+        break;
+      case "stepForward":
+        setPlayheadTime(Math.min(totalDuration, playheadTime + step));
+        break;
+      case "toStart":
+        setPlayheadTime(0);
+        break;
+      case "toEnd":
+        setPlayheadTime(totalDuration);
+        break;
+      case "selectPrev":
+        stepSelection(-1);
+        break;
+      case "selectNext":
+        stepSelection(1);
+        break;
+      case "markIn":
+        markClip("in");
+        break;
+      case "markOut":
+        markClip("out");
+        break;
+      case "moveEarlier":
+        if (selection.kind === "clip" && index !== -1) reorderClip(selection.id, big ? 0 : index - 1);
+        else nudgeSelected(-step);
+        break;
+      case "moveLater":
+        if (selection.kind === "clip" && index !== -1)
+          reorderClip(selection.id, big ? timeline.clips.length - 1 : index + 1);
+        else nudgeSelected(step);
+        break;
+      case "toggleMute":
+        if (selection.kind === "clip" && selected && "titles" in selected)
+          dispatch({ type: "clip.update", clipId: selected.id, patch: { muted: !selected.muted } });
+        else if (selection.kind === "layer" && selected && "opacity" in selected)
+          dispatch({ type: "layer.update", layerId: selected.id, patch: { muted: !selected.muted } });
+        else if (selection.kind === "audio" && selected && "role" in selected)
+          dispatch({ type: "audio.update", trackId: selected.id, patch: { muted: !selected.muted } });
+        break;
+      case "remove":
+        if (selection.kind === "clip") liftClipOut(selection.id);
+        else if (selection.kind === "layer" && selected && "opacity" in selected) {
+          dispatch({ type: "layer.remove", layerId: selected.id });
+          choose(NO_SELECTION);
+        } else if (selection.kind === "audio" && selected && "role" in selected) {
+          // The bed is the crew's; the Sound tab is the only way to drop it.
+          if (selected.role === "bed") break;
+          dispatch({ type: "audio.remove", trackId: selected.id });
+          choose(NO_SELECTION);
+        }
+        break;
+      case "escape":
+        if (helpOpen) setHelpOpen(false);
+        else if (sheetOpen) setSheetOpen(false);
+        else choose(NO_SELECTION);
+        break;
+      case "help":
+        setHelpOpen((open) => !open);
+        break;
+      case "panel1":
+        setPanelTab("shot");
+        break;
+      case "panel2":
+        setPanelTab("layers");
+        break;
+      case "panel3":
+        setPanelTab("sound");
+        break;
+      case "panel4":
+        setPanelTab("cut");
+        break;
+    }
+  };
+
+  useEditorKeys(!rendering, onKeyAction);
+
   const inspector =
     selection.kind === "clip"
       ? shotPanel
@@ -295,7 +492,15 @@ export function EditorView({
             ` · ${timeline.layers.length} layer${timeline.layers.length === 1 ? "" : "s"}`}
         </span>
 
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-label text-ink-400">
+        <button
+          onClick={() => setHelpOpen(true)}
+          className="btn-quiet-dark focus-ring-dark ml-auto hidden shrink-0 px-2 xl:inline-flex"
+          title="The keys"
+        >
+          ?
+        </button>
+
+        <span className="flex shrink-0 items-center gap-1.5 font-mono text-2xs uppercase tracking-label text-ink-400 xl:ml-0">
           <span
             aria-hidden
             className={cn(
@@ -323,6 +528,8 @@ export function EditorView({
         </p>
       )}
 
+      {helpOpen && <KeySheet onClose={() => setHelpOpen(false)} />}
+
       {/*
         `grid-cols-1` rather than the implicit single column: an implicit `auto`
         track is sized by its widest item's min-content, so one stubborn panel
@@ -344,6 +551,8 @@ export function EditorView({
             onTimeChange={setPlayheadTime}
             selectedClipId={selection.kind === "clip" ? selection.id : null}
             onSelectClip={(id) => choose({ kind: "clip", id })}
+            playing={playing}
+            onPlayingChange={setPlaying}
           />
 
           <TimelineTracks
@@ -355,6 +564,7 @@ export function EditorView({
             selection={selection}
             onSelect={choose}
             onDispatch={dispatch}
+            onReorderClip={reorderClip}
             playheadTime={playheadTime}
             onSeek={setPlayheadTime}
             onBackToGather={onBackToGather}
@@ -491,4 +701,52 @@ function soundStateFor(
     };
   }
   return undefined;
+}
+
+/**
+ * The keys, printed from the same list the handler runs — so this can't drift
+ * into describing an editor that no longer exists.
+ */
+function KeySheet({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keys"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[80dvh] w-full max-w-lg overflow-y-auto border border-[color:var(--hair-dark)] bg-ink-900 shadow-deck"
+      >
+        <div className="flex items-center justify-between border-b border-[color:var(--hair-dark)] px-4 py-3">
+          <p className="eyebrow-light">The keys</p>
+          <button onClick={onClose} className="btn-quiet-dark focus-ring-dark px-2" autoFocus>
+            Close
+          </button>
+        </div>
+        <div className="p-4">
+          <p className="mb-4 text-[13px] leading-relaxed text-ink-300">
+            Arrows move time, brackets move the thing you picked, up and down move the pick.
+            Hold Shift to go further. Nothing here fires while you&apos;re typing.
+          </p>
+          {KEY_SECTIONS.map((section) => (
+            <div key={section} className="mb-4 last:mb-0">
+              <p className="eyebrow-light mb-1.5">{section}</p>
+              {KEYMAP.filter((entry) => entry.section === section).map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex items-baseline justify-between gap-4 border-b border-[color:var(--hair-dark)] py-1.5 last:border-b-0"
+                >
+                  <span className="timecode shrink-0 text-xs text-paper-200">{entry.keys}</span>
+                  <span className="text-right text-[13px] text-ink-300">{entry.what}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
