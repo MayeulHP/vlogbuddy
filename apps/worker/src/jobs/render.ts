@@ -397,22 +397,19 @@ const MOTION_SUPERSAMPLE = 2;
 /**
  * A clip's fit, and the film's policy.
  *
- * `resolveFit`, `ClipFitChoice` and `DEFAULT_FIT_POLICY` all live in
- * `@vlogbuddy/shared`, but the timeline *document* doesn't carry either field
- * yet — `clipSchema` has no `fit` and `directorSettingsSchema` has no
- * `fitPolicy`, so `normalizeTimeline` strips both. Reading them off the parsed
- * object rather than off the type means the lab is already right the moment
- * they land; until then every clip asks `auto` and every film gets the default
- * policy, which is the behaviour the fill was specified with anyway.
+ * Both are on the document now, with `normalizeTimeline` filling in `auto` and
+ * the default policy for anything written before they existed. The values are
+ * still checked against the unions rather than trusted: a render reads a
+ * *snapshot*, and `render_jobs.timeline_snapshot` is jsonb that nothing
+ * re-validates between the job being queued and the lab picking it up.
  */
 function fitOf(clip: Clip): ClipFitChoice {
-  const asked = (clip as { fit?: unknown }).fit;
-  return CLIP_FIT_CHOICES.includes(asked as ClipFitChoice) ? (asked as ClipFitChoice) : "auto";
+  return CLIP_FIT_CHOICES.includes(clip.fit) ? clip.fit : "auto";
 }
 
 function policyOf(timeline: TimelineDoc): ClipFit {
-  const asked = (timeline.director as { fitPolicy?: unknown }).fitPolicy;
-  return CLIP_FITS.includes(asked as ClipFit) ? (asked as ClipFit) : DEFAULT_FIT_POLICY;
+  const asked = timeline.director.fitPolicy;
+  return CLIP_FITS.includes(asked) ? asked : DEFAULT_FIT_POLICY;
 }
 
 /**

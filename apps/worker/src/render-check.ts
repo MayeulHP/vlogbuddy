@@ -142,10 +142,9 @@ function track(over: Partial<Track> = {}): Track {
 /**
  * Pins a document's fit choices.
  *
- * `clip.fit` and `director.fitPolicy` aren't in the timeline schema yet, so
- * `timelineDocSchema.parse` strips both — the renderer reads them off the
- * parsed object precisely so it is already right when they land. Setting them
- * has to happen after the parse for the same reason.
+ * Both fields are on the schema now, so the parse keeps them — this only
+ * exists so a case can state its fit inline, next to the shot it's about,
+ * instead of threading the choice through the fixture builder.
  */
 function withFit(doc: TimelineDoc, fit?: ClipFitChoice, policy?: ClipFit): TimelineDoc {
   return {

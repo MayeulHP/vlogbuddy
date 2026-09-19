@@ -15,10 +15,12 @@ import {
   movesFrame,
   overlapsPrevious,
   previewFrame,
+  resolveFit,
   transitionOverlap,
   timelineDuration,
   type AudioTrack,
   type Clip,
+  type ClipFit,
   type LayerClip,
   type TimelineDoc,
   type TransitionEffect,
@@ -187,6 +189,33 @@ function transitionStyles(
 
 /** How often playback tells the rest of the bench where it is. */
 const PUBLISH_INTERVAL = 1 / 30;
+
+/**
+ * The blurred backdrop, as far as CSS can carry it.
+ *
+ * `fitChain` blurs at `sigma = short edge / 40`, and CSS `blur(<length>)` is a
+ * gaussian whose standard deviation *is* that length — so the same 2.5% of the
+ * frame's short edge is the same softness at any size the browser gives the
+ * box. `cqmin` reads off the picture box, which is a size container, rather
+ * than off the stage it floats in.
+ */
+const BACKDROP_BLUR = "2.5cqmin";
+
+/**
+ * How far the backdrop is grown past the frame before it is blurred.
+ *
+ * A CSS blur samples transparency outside the element's own box, so a backdrop
+ * cut exactly to the frame fades to nothing at all four edges — a vignette the
+ * render has no idea about, because `gblur` clamps at the picture's edge
+ * instead. Oversizing puts real pixels where the blur reaches for them; the
+ * surplus is clipped off by the frame.
+ *
+ * `max-w-none` on the element is what makes it stick: Tailwind's preflight
+ * caps every image and video at `max-width: 100%`, which silently clamps this
+ * back to the frame's width on the horizontal axis alone — a backdrop bled on
+ * one axis and not the other, which is a stranger picture than no bleed at all.
+ */
+const BACKDROP_BLEED = 6;
 
 export function PreviewPlayer({
   timeline,
@@ -511,6 +540,8 @@ export function PreviewPlayer({
         playing={playing}
         style={fx.outgoing}
         gain={1 - transition.progress}
+        frame={frame}
+        policy={timeline.director.fitPolicy}
       />
     ) : null,
     active && src ? (
@@ -523,6 +554,8 @@ export function PreviewPlayer({
         playing={playing}
         style={fx?.incoming}
         gain={transition ? transition.progress : 1}
+        frame={frame}
+        policy={timeline.director.fitPolicy}
         onEnded={() => {
           // Roll into the next clip.
           const next = timeline.clips[active.index + 1];
@@ -709,8 +742,16 @@ function pictureSrc(clip: Clip | LayerClip, media: MediaItemView | null): string
  * It exists as its own component because a transition needs two of them on
  * screen at once, each seeking its own source — the playhead stays the
  * player's, and this only ever follows it. `style` is the transition's; the
- * grade and the Ken Burns move stay on the picture inside, so a shot keeps
+ * grade and the Ken Burns move stay on the picture inside it, so a shot keeps
  * both while it dissolves.
+ *
+ * What happens at the edges of a shot that isn't the frame's shape is
+ * `resolveFit`'s answer, asked with the same dimensions, rotation and policy
+ * the lab asks it with — one rule, two renderers. `bars` is the browser's own
+ * `object-contain` over the black box; `fill` is `object-cover`, which is
+ * `scale=increase,crop` by another name; `blur` lays a grown, blurred copy of
+ * the shot underneath the contained one, the way `fitChain` overlays a
+ * `gblur`'d backdrop.
  */
 function ClipView({
   clip,
@@ -721,6 +762,8 @@ function ClipView({
   style,
   gain = 1,
   onEnded,
+  frame,
+  policy,
 }: {
   clip: Clip;
   media: MediaItemView | null;
@@ -731,8 +774,13 @@ function ClipView({
   /** The transition's side of the `acrossfade` the renderer performs. */
   gain?: number;
   onEnded?: () => void;
+  /** The render frame, for the one question `resolveFit` asks. */
+  frame: { width: number; height: number };
+  /** The film's answer for a mismatched shot that hasn't overruled it. */
+  policy: ClipFit;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backdropRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -744,42 +792,100 @@ function ClipView({
     // the seek target is scaled as well as the rate — otherwise the picture
     // drifts further out of step the longer the shot runs.
     const speed = clipSpeed(clip);
-    video.playbackRate = speed;
-
     const target = clip.trimStart + offset * speed;
-    if (Math.abs(video.currentTime - target) > 0.35) {
-      video.currentTime = Math.max(0, target);
-    }
 
-    if (playing && video.paused) void video.play().catch(() => {});
-    if (!playing && !video.paused) video.pause();
+    // The backdrop is the same shot behind itself, so it is driven from here
+    // rather than given a clock of its own: two elements seeking independently
+    // would sooner or later show two different moments of one shot, with the
+    // blurred one lagging visibly at the edges.
+    for (const el of [video, backdropRef.current]) {
+      if (!el) continue;
+      el.playbackRate = speed;
+      if (Math.abs(el.currentTime - target) > 0.35) {
+        el.currentTime = Math.max(0, target);
+      }
+      if (playing && el.paused) void el.play().catch(() => {});
+      if (!playing && !el.paused) el.pause();
+    }
   }, [clip, offset, playing, gain]);
 
   const src = pictureSrc(clip, media);
   if (!src) return null;
 
+  const fit = resolveFit({
+    clipWidth: media?.width,
+    clipHeight: media?.height,
+    clipRotation: media?.rotation,
+    frameWidth: frame.width,
+    frameHeight: frame.height,
+    fit: clip.fit,
+    policy,
+  });
+
   const scale = motionScale(clip, offset, duration);
+  /*
+   * The grade and the move sit on the pair, not on the picture alone. FFmpeg
+   * fits first and grades second, so a blurred backdrop is graded with the
+   * shot it came from and travels with the Ken Burns move — the alternative
+   * is a still that drifts inside a backdrop that doesn't.
+   */
   const pictureStyle: React.CSSProperties = {
     filter: gradeStyle(clip),
     transform: scale === undefined ? undefined : `scale(${scale.toFixed(4)})`,
   };
+  const objectFit = fit === "fill" ? "object-cover" : "object-contain";
+
+  const backdropStyle: React.CSSProperties = {
+    filter: `blur(${BACKDROP_BLUR})`,
+    left: `${-BACKDROP_BLEED}%`,
+    top: `${-BACKDROP_BLEED}%`,
+    width: `${100 + BACKDROP_BLEED * 2}%`,
+    height: `${100 + BACKDROP_BLEED * 2}%`,
+  };
 
   return (
     <div className="absolute inset-0" style={style}>
-      {clip.kind === "video" ? (
-        <video
-          ref={videoRef}
-          src={src}
-          style={pictureStyle}
-          className="h-full w-full object-contain"
-          playsInline
-          muted={clip.muted}
-          onEnded={onEnded}
-        />
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="" style={pictureStyle} className="h-full w-full object-contain" />
-      )}
+      <div className="absolute inset-0" style={pictureStyle}>
+        {fit === "blur" &&
+          (clip.kind === "video" ? (
+            <video
+              ref={backdropRef}
+              src={src}
+              style={backdropStyle}
+              className="pointer-events-none absolute max-w-none object-cover"
+              playsInline
+              muted
+              aria-hidden
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={src}
+              alt=""
+              style={backdropStyle}
+              className="pointer-events-none absolute max-w-none object-cover"
+              aria-hidden
+            />
+          ))}
+
+        {clip.kind === "video" ? (
+          <video
+            ref={videoRef}
+            src={src}
+            className={cn("absolute inset-0 h-full w-full", objectFit)}
+            playsInline
+            muted={clip.muted}
+            onEnded={onEnded}
+          />
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt=""
+            className={cn("absolute inset-0 h-full w-full", objectFit)}
+          />
+        )}
+      </div>
     </div>
   );
 }
