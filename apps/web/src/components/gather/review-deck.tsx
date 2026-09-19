@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatDayLong, type ReactionTier } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { reactAction } from "@/lib/actions/reactions";
+import { useDialog } from "@/hooks/use-dialog";
 import { cn } from "@/lib/cn";
 
 /**
@@ -104,12 +105,16 @@ export function ReviewDeck({
 
   useEffect(() => () => { if (exitTimer.current) clearTimeout(exitTimer.current); }, []);
 
+  /**
+   * Escape, the trap and the scroll lock. Focus lands on the container rather
+   * than a button on purpose — the deck reads Space and the arrows as
+   * verdicts, and a focused button would swallow them.
+   */
+  const dialogRef = useDialog<HTMLDivElement>(onClose);
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       switch (e.key) {
-        case "Escape":
-          onClose();
-          break;
         case "ArrowLeft":
         case " ":
           e.preventDefault();
@@ -138,12 +143,10 @@ export function ReviewDeck({
       }
     }
     window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [commit, undo, onClose]);
+    // The scroll lock belongs to `useDialog` now; two owners would fight over
+    // restoring it.
+    return () => window.removeEventListener("keydown", onKey);
+  }, [commit, undo]);
 
   /** Which way the current drag is leaning, if it's leaning far enough to count. */
   const leaning = useMemo<Verdict | null>(() => {
@@ -172,7 +175,14 @@ export function ReviewDeck({
   })();
 
   return (
-    <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Review the pile"
+      tabIndex={-1}
+      className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950 outline-none"
+    >
       <header className="pt-safe px-safe shrink-0 border-b border-[color:var(--hair-dark)]">
         <div className="flex items-center gap-2 px-4 py-2.5 sm:items-end sm:gap-4 sm:py-3 sm:px-6">
           <div className="min-w-0 flex-1">

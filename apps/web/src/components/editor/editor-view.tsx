@@ -27,6 +27,7 @@ import { NO_SELECTION, type Selection } from "./selection";
 import { PanelEmpty, PanelTabs, type PanelTab } from "./panel-tabs";
 import { KEYMAP, KEY_SECTIONS, type KeyAction } from "./keymap";
 import { useEditorKeys } from "./use-editor-keys";
+import { useDialog } from "@/hooks/use-dialog";
 import { cn } from "@/lib/cn";
 
 interface EditorViewProps {
@@ -708,12 +709,15 @@ function soundStateFor(
  * into describing an editor that no longer exists.
  */
 function KeySheet({ onClose }: { onClose: () => void }) {
+  const dialogRef = useDialog<HTMLDivElement>(onClose);
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-label="Keys"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4"
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4 outline-none"
       onClick={onClose}
     >
       <div
@@ -722,7 +726,7 @@ function KeySheet({ onClose }: { onClose: () => void }) {
       >
         <div className="flex items-center justify-between border-b border-[color:var(--hair-dark)] px-4 py-3">
           <p className="eyebrow-light">The keys</p>
-          <button onClick={onClose} className="btn-quiet-dark focus-ring-dark px-2" autoFocus>
+          <button onClick={onClose} className="btn-quiet-dark focus-ring-dark px-2">
             Close
           </button>
         </div>

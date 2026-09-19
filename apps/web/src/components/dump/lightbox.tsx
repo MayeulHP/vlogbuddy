@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { formatDuration, type ReactionTier } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
+import { useDialog } from "@/hooks/use-dialog";
 import { ReactionBar } from "./reaction-bar";
 
 /** One frame, enlarged, with its slate and the crew's marks. */
@@ -19,15 +20,9 @@ export function Lightbox({
   crew?: number;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = "";
-    };
-  }, [onClose]);
+  // Escape, the scroll lock, a focus trap and focus put back where it came
+  // from — all of which this had none of but the first two.
+  const dialogRef = useDialog<HTMLDivElement>(onClose);
 
   // Photos get a proxy too now — a JPEG standing in for an iPhone's HEIC, which
   // no browser but Safari will paint, or for an original too big to be worth
@@ -37,7 +32,15 @@ export function Lightbox({
   // The scrim is `/95`, not `/97`: 97 isn't a step on Tailwind's opacity scale,
   // so it compiled to no background at all and the lightbox was see-through.
   return (
-    <div className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950/95" onClick={onClose}>
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Full frame"
+      tabIndex={-1}
+      className="fixed inset-0 z-[100] flex animate-fade-in flex-col bg-ink-950/95 outline-none"
+      onClick={onClose}
+    >
       <header className="pt-safe px-safe border-b border-[color:var(--hair-dark)]">
         <div className="flex items-end justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="min-w-0">
