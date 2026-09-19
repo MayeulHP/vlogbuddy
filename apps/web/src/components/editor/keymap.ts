@@ -115,10 +115,10 @@ export const KEYMAP: KeyEntry[] = [
     match: (e) => e.key === "Delete" || e.key === "Backspace",
   },
 
-  { id: "panel1", keys: "1", what: "Shot", section: "Panels", match: is("1") },
-  { id: "panel2", keys: "2", what: "Layers", section: "Panels", match: is("2") },
-  { id: "panel3", keys: "3", what: "Sound", section: "Panels", match: is("3") },
-  { id: "panel4", keys: "4", what: "Cut", section: "Panels", match: is("4") },
+  { id: "panel1", keys: "1", what: "Back to what you picked", section: "Panels", match: is("1") },
+  { id: "panel2", keys: "2", what: "Lay something over the picture", section: "Panels", match: is("2") },
+  { id: "panel3", keys: "3", what: "Put something underneath it", section: "Panels", match: is("3") },
+  { id: "panel4", keys: "4", what: "The film's settings", section: "Panels", match: is("4") },
   { id: "help", keys: "?", what: "This list", section: "Panels", match: (e) => e.key === "?" },
 ];
 

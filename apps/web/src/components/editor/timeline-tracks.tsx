@@ -1,24 +1,28 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   MAX_LAYERS,
+  MIN_CLIP_SPAN,
   TRANSITION_GLYPHS,
   TRANSITION_LABELS,
   audioTrackSpan,
   clipDuration,
   clipStartTimes,
   formatDuration,
+  formatFine,
   overlapsPrevious,
   type AudioTrack,
-  type LayerClip,
+  type Clip,
   type Scene,
   type TimelineDoc,
   type TimelineOp,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { useIsTouch } from "@/hooks/use-media-query";
+import { makeSnap, quantize } from "@/lib/snap";
 import { cn } from "@/lib/cn";
+import { AnchoredPopover } from "./anchored-popover";
 import type { Selection } from "./selection";
 
 /**
@@ -39,14 +43,29 @@ import type { Selection } from "./selection";
  * A 30px audio block is a comfortable target for a pointer and a miserable one
  * for a thumb, and the lane names can't take a fifth of a 375px screen. So the
  * bench has a touch set of numbers as well as a desk set.
+ *
+ * `grip` is the width of a trim handle's *hit* zone rather than the hairline it
+ * paints: the edge of a shot is a 1px idea and a thumb is not.
  */
 const LANES = {
-  desk: { scene: 21, ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]" },
-  touch: { scene: 28, ruler: 26, layer: 44, base: 88, audio: 40, gutter: "w-[52px]" },
+  desk: { scene: 21, ruler: 22, layer: 34, base: 78, audio: 30, gutter: "w-[74px]", grip: 14 },
+  touch: { scene: 28, ruler: 26, layer: 44, base: 88, audio: 40, gutter: "w-[52px]", grip: 26 },
 } as const;
 
 const MIN_SCALE = 6;
 const MAX_SCALE = 140;
+
+/**
+ * What the strip toolbar can add. One order, one set of words, used by the
+ * buttons here and by the sheet the bench puts up on a phone — so the two
+ * can't drift apart.
+ */
+export type AddKind = "layer" | "sound";
+
+export const ADD_KINDS: { kind: AddKind; label: string }[] = [
+  { kind: "layer", label: "+ Layer" },
+  { kind: "sound", label: "+ Sound" },
+];
 
 export function TimelineTracks({
   timeline,
@@ -61,6 +80,10 @@ export function TimelineTracks({
   playheadTime,
   onSeek,
   onBackToGather,
+  addOpen,
+  onAddOpenChange,
+  renderAddPicker,
+  anchoredPickers,
 }: {
   timeline: TimelineDoc;
   mediaById: Map<string, MediaItemView>;
@@ -79,6 +102,16 @@ export function TimelineTracks({
   playheadTime: number;
   onSeek: (t: number) => void;
   onBackToGather?: () => void;
+  /**
+   * The add-verbs live on the strip toolbar because what they add lands on the
+   * strip, but the bench owns the state: below `md` the same pickers come up as
+   * a sheet instead of a popover, and only the bench knows which it is.
+   */
+  addOpen: AddKind | null;
+  onAddOpenChange: (kind: AddKind | null) => void;
+  renderAddPicker: (kind: AddKind, done: () => void) => React.ReactNode;
+  /** md and up: hang the picker off its button. Below, the bench sheets it. */
+  anchoredPickers: boolean;
 }) {
   const touch = useIsTouch();
   const lanes = touch ? LANES.touch : LANES.desk;
@@ -87,7 +120,12 @@ export function TimelineTracks({
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const laneRef = useRef<HTMLDivElement>(null);
 
-  const starts = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
+  /**
+   * Where the shots sit as stored. The magnets snap to these rather than to the
+   * live layout below: a trim in flight moves every later cut, and magnets that
+   * slide around under the pointer are worse than no magnets.
+   */
+  const committed = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
   const musicById = useMemo(() => new Map(music.map((m) => [m.id, m])), [music]);
 
   /** The scene being renamed, and the words so far. */
@@ -107,12 +145,14 @@ export function TimelineTracks({
     for (const clip of timeline.clips) {
       if (clip.sceneId && !firstClip.has(clip.sceneId)) firstClip.set(clip.sceneId, clip);
     }
+    // Ordered by where the shots sit as stored; *drawn* against the live
+    // layout below, so a trim in flight carries the markers with it.
     const marks = timeline.scenes.flatMap((scene) => {
       const clip = firstClip.get(scene.id);
-      return clip ? [{ scene, clip, at: starts[clip.id] ?? 0 }] : [];
+      return clip ? [{ scene, clip }] : [];
     });
-    return marks.sort((a, b) => a.at - b.at);
-  }, [timeline.clips, timeline.scenes, starts]);
+    return marks.sort((a, b) => (committed[a.clip.id] ?? 0) - (committed[b.clip.id] ?? 0));
+  }, [timeline.clips, timeline.scenes, committed]);
 
   function commitRename(scene: Scene) {
     // Enter commits and closes the box, which then blurs — so the guard is what
@@ -127,25 +167,18 @@ export function TimelineTracks({
   /** Clip boundaries double as magnets — layers usually want to hit a cut. */
   const snapPoints = useMemo(() => {
     const points = new Set<number>([0, totalDuration]);
-    for (const clip of timeline.clips) points.add(starts[clip.id] ?? 0);
+    for (const clip of timeline.clips) points.add(committed[clip.id] ?? 0);
     return [...points].sort((a, b) => a - b);
-  }, [timeline.clips, starts, totalDuration]);
+  }, [timeline.clips, committed, totalDuration]);
 
-  const snap = useCallback(
-    (seconds: number) => {
-      const tolerance = 8 / scale;
-      for (const point of snapPoints) {
-        if (Math.abs(point - seconds) <= tolerance) return point;
-      }
-      return Math.round(seconds * 20) / 20;
-    },
-    [snapPoints, scale],
-  );
+  const snap = useMemo(() => makeSnap(snapPoints, scale), [snapPoints, scale]);
 
   // --- dragging blocks along the clock ------------------------------------
   type Drag = {
     mode: "move" | "resize";
-    target: "layer" | "audio";
+    /** Which end a resize took hold of. A move ignores it. */
+    edge: "start" | "end";
+    target: "layer" | "audio" | "clip";
     id: string;
     pointerX: number;
     origin: number;
@@ -169,6 +202,15 @@ export function TimelineTracks({
       setDrag(next);
     };
 
+    /**
+     * The browser took the gesture over — a vertical pan on a phone, most
+     * likely. It never meant to be an edit, so it doesn't become one.
+     */
+    const cancel = () => {
+      dragRef.current = null;
+      setDrag(null);
+    };
+
     const up = () => {
       const current = dragRef.current;
       dragRef.current = null;
@@ -176,7 +218,19 @@ export function TimelineTracks({
       if (!current) return;
 
       const value = current.origin + current.delta;
-      const start = clamp(snap(value), 0, Math.max(0, totalDuration - 0.2));
+
+      if (current.target === "clip") {
+        const clip = timeline.clips.find((c) => c.id === current.id);
+        if (!clip) return;
+        // A trim that rounds to nothing dispatches nothing: `clip.update`
+        // hands the shot's timing away from the auto-cut for good, and a
+        // fumbled grab shouldn't be able to do that silently.
+        const patch = trimPatch(clip, durations[clip.mediaItemId] ?? null, current.edge, current.delta);
+        if (patch) onDispatch({ type: "clip.update", clipId: clip.id, patch });
+        return;
+      }
+
+      const start = clamp(snap(value), 0, Math.max(0, totalDuration - MIN_CLIP_SPAN));
 
       if (current.target === "layer") {
         const layer = timeline.layers.find((l) => l.id === current.id);
@@ -187,42 +241,54 @@ export function TimelineTracks({
           patch:
             current.mode === "move"
               ? { startAt: start }
-              : { duration: Math.max(0.2, snap(layer.startAt + value) - layer.startAt) },
+              : current.edge === "end"
+                ? {
+                    duration: Math.max(
+                      MIN_CLIP_SPAN,
+                      round3(snap(layer.startAt + value) - layer.startAt),
+                    ),
+                  }
+                : headPatch(layer.startAt, layer.duration, start),
         });
       } else {
         const track = timeline.audio.find((t) => t.id === current.id);
         if (!track) return;
+        const span = audioTrackSpan(track, totalDuration);
         onDispatch({
           type: "audio.update",
           trackId: current.id,
           patch:
             current.mode === "move"
               ? { startAt: start }
-              : { duration: Math.max(0.2, snap(track.startAt + value) - track.startAt) },
+              : current.edge === "end"
+                ? {
+                    duration: Math.max(
+                      MIN_CLIP_SPAN,
+                      round3(snap(track.startAt + value) - track.startAt),
+                    ),
+                  }
+                : headPatch(track.startAt, span, start),
         });
       }
     };
 
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
+    window.addEventListener("pointercancel", cancel);
     return () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("pointercancel", cancel);
     };
-  }, [dragging, scale, snap, timeline.layers, timeline.audio, totalDuration, onDispatch]);
+  }, [dragging, scale, snap, timeline, durations, totalDuration, onDispatch]);
 
-  function startDrag(
-    event: React.PointerEvent,
-    mode: Drag["mode"],
-    target: Drag["target"],
-    id: string,
-    origin: number,
-  ) {
+  function startDrag(event: React.PointerEvent, spec: Omit<Drag, "pointerX" | "delta">) {
     event.stopPropagation();
+    // Also what stops the native drag-and-drop reorder starting from a grip:
+    // the shot's block is `draggable`, and a suppressed `mousedown` never
+    // becomes a `dragstart`.
     event.preventDefault();
-    const next = { mode, target, id, pointerX: event.clientX, origin, delta: 0 };
+    const next = { ...spec, pointerX: event.clientX, delta: 0 };
     dragRef.current = next;
     setDrag(next);
   }
@@ -233,10 +299,38 @@ export function TimelineTracks({
     if (drag.mode === "move") {
       return { start: clamp(drag.origin + drag.delta, 0, totalDuration), span };
     }
-    return { start, span: Math.max(0.2, drag.origin + drag.delta) };
+    if (drag.edge === "end") {
+      return { start, span: Math.max(MIN_CLIP_SPAN, drag.origin + drag.delta) };
+    }
+    // Dragging the head leaves the tail where it is.
+    const end = start + span;
+    const head = clamp(drag.origin + drag.delta, 0, end - MIN_CLIP_SPAN);
+    return { start: head, span: end - head };
   }
 
-  const contentWidth = Math.max(320, totalDuration * scale);
+  /**
+   * The trim under the pointer, resolved through exactly the code that will
+   * commit it — so what the strip shows while you drag and what lands in the
+   * document can't drift apart.
+   */
+  const trim = (() => {
+    if (!drag || drag.target !== "clip" || drag.mode !== "resize") return null;
+    const clip = timeline.clips.find((c) => c.id === drag.id);
+    if (!clip) return null;
+    const source = durations[clip.mediaItemId] ?? null;
+    const patch = trimPatch(clip, source, drag.edge, drag.delta);
+    const shown = patch ? { ...clip, ...patch } : clip;
+    return { clip: shown, edge: drag.edge, source, span: clipDuration(shown, source) };
+  })();
+
+  /**
+   * Positions including that trim. The base track is a sequence, so shortening
+   * one shot pulls every shot after it earlier — a ghost floating over its
+   * neighbours would be lying about what letting go does.
+   */
+  const live = layout(timeline, durations, trim && { id: trim.clip.id, span: trim.span });
+
+  const contentWidth = Math.max(320, Math.max(totalDuration, live.total) * scale);
 
   function seekFromEvent(event: React.MouseEvent) {
     const box = laneRef.current?.getBoundingClientRect();
@@ -275,12 +369,54 @@ export function TimelineTracks({
       otherwise push the picture off the bottom of the window. Past the cap the
       lanes scroll against themselves — the page never does.
     */
-    <section className="flex min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-850 xl:max-h-[42dvh] xl:overflow-y-auto">
-      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-2 py-1.5 sm:px-3 sm:py-2">
-        <p className="eyebrow-light">Reel 02 · Strip</p>
+    <section className="flex min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-850 xl:max-h-[42dvh]">
+      {/*
+        The toolbar sits outside the scroll, so the pickers that hang off it
+        aren't clipped by the cap below — and so the zoom stays reachable
+        however far down the lanes you've scrolled.
+      */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-2 py-1.5 sm:px-3 sm:py-2">
+        {/*
+          The verbs sit on the thing they act on. "Reel 02 · Strip" was
+          decoration in the one place a friend looks for "how do I add
+          something?", and the answer used to be a tab away in a side column
+          that duplicated the lanes.
+        */}
+        <div className="flex min-w-0 items-center gap-1">
+          {ADD_KINDS.map(({ kind, label }) => {
+            const open = addOpen === kind;
+            return (
+              <div key={kind} className="relative shrink-0">
+                <button
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() => onAddOpenChange(open ? null : kind)}
+                  className={cn(
+                    "flex min-h-[34px] items-center border px-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                    open
+                      ? "border-paper-100 bg-paper-100 text-ink-900"
+                      : "border-[color:var(--hair-dark)] text-ink-300 hover:bg-ink-800 hover:text-paper-100",
+                  )}
+                >
+                  {label}
+                </button>
+                {open && anchoredPickers && (
+                  <AnchoredPopover
+                    label={label}
+                    onClose={() => onAddOpenChange(null)}
+                    style={{ width: 300 }}
+                    className="left-0 top-full mt-1"
+                  >
+                    {renderAddPicker(kind, () => onAddOpenChange(null))}
+                  </AnchoredPopover>
+                )}
+              </div>
+            );
+          })}
+        </div>
         <div className="flex items-center gap-2">
           <p className="eyebrow-light hidden lg:block">
-            {touch ? "Drag layers to retime · tap a shot to trim it" : "Drag shots to reorder · layers to retime"}
+            Drag shots to reorder · drag their edges to trim
           </p>
           <div className="flex items-stretch border border-[color:var(--hair-dark)]">
             <button
@@ -301,7 +437,7 @@ export function TimelineTracks({
         </div>
       </div>
 
-      <div className="flex">
+      <div className="flex min-h-0 flex-1 xl:overflow-y-auto">
         {/* Lane names, parked outside the scroll so they're always readable. */}
         <div className={cn(lanes.gutter, "shrink-0 border-r border-[color:var(--hair-dark)]")}>
           {sceneMarks.length > 0 && (
@@ -348,11 +484,13 @@ export function TimelineTracks({
             */}
             {sceneMarks.length > 0 && (
               <div style={{ height: lanes.scene }} className="relative select-none">
-                {sceneMarks.map(({ scene, clip, at }, i) => {
+                {sceneMarks.map(({ scene, clip }, i) => {
+                  const at = live.starts[clip.id] ?? 0;
                   const next = sceneMarks[i + 1];
+                  const nextAt = next ? live.starts[next.clip.id] ?? 0 : live.total;
                   // Never wider than the scene itself, so a run of short scenes
                   // reads as several marks rather than one long smear.
-                  const room = ((next ? next.at : totalDuration) - at) * scale - 4;
+                  const room = (nextAt - at) * scale - 4;
                   return (
                     <div
                       key={scene.id}
@@ -452,17 +590,26 @@ export function TimelineTracks({
                     const media = mediaById.get(layer.mediaItemId);
                     const active =
                       selection.kind === "layer" && selection.id === layer.id;
+                    const width = Math.max(14, span * scale);
                     return (
                       <div
                         key={layer.id}
-                        onPointerDown={(e) => startDrag(e, "move", "layer", layer.id, layer.startAt)}
+                        onPointerDown={(e) =>
+                          startDrag(e, {
+                            mode: "move",
+                            edge: "start",
+                            target: "layer",
+                            id: layer.id,
+                            origin: layer.startAt,
+                          })
+                        }
                         onClick={(e) => {
                           e.stopPropagation();
                           onSelect({ kind: "layer", id: layer.id });
                         }}
                         style={{
                           left: start * scale,
-                          width: Math.max(14, span * scale),
+                          width,
                           backgroundImage: media?.thumbnailUrl
                             ? `url(${media.thumbnailUrl})`
                             : undefined,
@@ -478,12 +625,43 @@ export function TimelineTracks({
                         <span className="absolute inset-y-0 left-1 flex items-center truncate pr-3 font-mono text-2xs text-paper-100">
                           {media?.originalFilename ?? "layer"}
                         </span>
-                        <span
-                          onPointerDown={(e) =>
-                            startDrag(e, "resize", "layer", layer.id, layer.duration)
-                          }
-                          className="absolute inset-y-0 right-0 w-2 cursor-ew-resize bg-paper-100/0 transition-colors hover:bg-paper-100/40"
-                        />
+                        {/*
+                          Below a couple of grip widths the two handles would be
+                          the whole block and there'd be nothing left to grab to
+                          move it. Zoom is the answer to a block too small.
+                        */}
+                        {width > lanes.grip * 2.5 && (
+                          <>
+                            <Grip
+                              side="start"
+                              width={lanes.grip}
+                              title="Drag to start this layer later"
+                              onPointerDown={(e) =>
+                                startDrag(e, {
+                                  mode: "resize",
+                                  edge: "start",
+                                  target: "layer",
+                                  id: layer.id,
+                                  origin: layer.startAt,
+                                })
+                              }
+                            />
+                            <Grip
+                              side="end"
+                              width={lanes.grip}
+                              title="Drag to hold this layer for longer"
+                              onPointerDown={(e) =>
+                                startDrag(e, {
+                                  mode: "resize",
+                                  edge: "end",
+                                  target: "layer",
+                                  id: layer.id,
+                                  origin: layer.duration,
+                                })
+                              }
+                            />
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -498,7 +676,9 @@ export function TimelineTracks({
                 e.preventDefault();
                 const box = laneRef.current?.getBoundingClientRect();
                 if (!box) return;
-                setDropIndex(indexAt((e.clientX - box.left) / scale, timeline, starts, durations));
+                setDropIndex(
+                  indexAt((e.clientX - box.left) / scale, timeline, live.starts, durations),
+                );
               }}
               onDrop={() => {
                 if (draggingClipId && dropIndex !== null) {
@@ -514,18 +694,28 @@ export function TimelineTracks({
             >
               {timeline.clips.map((clip, index) => {
                 const media = mediaById.get(clip.mediaItemId);
-                const duration = clipDuration(clip, durations[clip.mediaItemId]);
-                const active = selection.kind === "clip" && selection.id === clip.id;
                 const source = durations[clip.mediaItemId] ?? null;
+                // The clip as the strip should show it *now*, trim in flight
+                // included, so the numbers and the ghost agree with the drag.
+                const shown = trim && trim.clip.id === clip.id ? trim.clip : clip;
+                const duration = live.spans[clip.id] ?? clipDuration(shown, source);
+                const active = selection.kind === "clip" && selection.id === clip.id;
                 // What the auto-cut left on the cutting-room floor, drawn as a
-                // ghost either side of the shot so there's something visible to
-                // reach for when a moment deserved more room.
-                const headSpare = clip.kind === "video" ? clip.trimStart : 0;
+                // ghost either side of the shot: now that the edges are
+                // draggable it's the budget you're dragging into, and it
+                // shrinks as you spend it.
+                const headSpare = shown.kind === "video" ? shown.trimStart : 0;
                 const tailSpare =
-                  clip.kind === "video" && source !== null
-                    ? Math.max(0, source - (clip.trimEnd ?? source))
+                  shown.kind === "video" && source !== null
+                    ? Math.max(0, source - (shown.trimEnd ?? source))
                     : 0;
-                const left = (starts[clip.id] ?? 0) * scale;
+                // A shot whose length is nobody's but yours. Worth marking:
+                // the auto-cut will never re-time it again, even on a re-cut.
+                const handTimed =
+                  !clip.auto.includes("timing") && (headSpare > 0.05 || tailSpare > 0.05);
+                const left = (live.starts[clip.id] ?? 0) * scale;
+                const width = Math.max(6, duration * scale - 2);
+                const grippable = width > lanes.grip * 2.5;
                 return (
                   <Fragment key={clip.id}>
                     {(headSpare > 0.2 || tailSpare > 0.2) && (
@@ -543,16 +733,21 @@ export function TimelineTracks({
                   <button
                     key={clip.id}
                     draggable
-                    onDragStart={() => setDraggingClipId(clip.id)}
+                    onDragStart={(e) => {
+                      // A grip already owns the pointer: the browser is being
+                      // asked to start a reorder the hand never meant.
+                      if (dragRef.current) {
+                        e.preventDefault();
+                        return;
+                      }
+                      setDraggingClipId(clip.id);
+                    }}
                     onDragEnd={() => {
                       setDraggingClipId(null);
                       setDropIndex(null);
                     }}
                     onClick={() => onSelect({ kind: "clip", id: clip.id })}
-                    style={{
-                      left: (starts[clip.id] ?? 0) * scale,
-                      width: Math.max(6, duration * scale - 2),
-                    }}
+                    style={{ left, width }}
                     className={cn(
                       "absolute inset-y-1 overflow-hidden border text-left transition-colors",
                       active
@@ -573,11 +768,19 @@ export function TimelineTracks({
                       <div className="h-full w-full bg-ink-800 bg-hatch" />
                     )}
 
-                    <span className="absolute left-0 top-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200">
+                    <span className="pointer-events-none absolute left-0 top-0 bg-ink-950/80 px-1 font-mono text-2xs tabular-nums text-paper-200">
                       {String(index + 1).padStart(2, "0")}
                     </span>
 
-                    <span className="absolute bottom-0 left-0 flex gap-px">
+                    <span className="pointer-events-none absolute bottom-0 left-0 flex gap-px">
+                      {handTimed && (
+                        <span
+                          className="bg-ink-950/80 px-1 font-mono text-2xs text-paper-200"
+                          title="Trimmed by hand — the auto-cut won't re-time it"
+                        >
+                          ✂
+                        </span>
+                      )}
                       {overlapsPrevious(clip.transitionIn) && index > 0 && (
                         <span
                           className="bg-ink-950/80 px-1 font-mono text-2xs text-paper-200"
@@ -603,15 +806,88 @@ export function TimelineTracks({
                         </span>
                       )}
                     </span>
+
+                    {/*
+                      Below a couple of grip widths the two handles would be the
+                      whole shot and there'd be nothing left to grab for the
+                      reorder. Zoom is the answer to a shot too small to trim.
+                    */}
+                    {grippable && (
+                      <>
+                        <Grip
+                          side="start"
+                          width={lanes.grip}
+                          title={
+                            clip.kind === "video"
+                              ? `Drag to move the in-point${headSpare > 0.05 ? ` — ${formatFine(headSpare)} spare` : ""}`
+                              : "Drag to shorten the hold"
+                          }
+                          onPointerDown={(e) => {
+                            // Selecting on the grab rather than on the click
+                            // that may follow it: the inspector should already
+                            // be showing this shot by the time the edge moves.
+                            onSelect({ kind: "clip", id: clip.id });
+                            startDrag(e, {
+                              mode: "resize",
+                              edge: "start",
+                              target: "clip",
+                              id: clip.id,
+                              origin: 0,
+                            });
+                          }}
+                        />
+                        <Grip
+                          side="end"
+                          width={lanes.grip}
+                          title={
+                            clip.kind === "video"
+                              ? `Drag to move the out-point${tailSpare > 0.05 ? ` — ${formatFine(tailSpare)} spare` : ""}`
+                              : "Drag to lengthen the hold"
+                          }
+                          onPointerDown={(e) => {
+                            onSelect({ kind: "clip", id: clip.id });
+                            startDrag(e, {
+                              mode: "resize",
+                              edge: "end",
+                              target: "clip",
+                              id: clip.id,
+                              origin: 0,
+                            });
+                          }}
+                        />
+                      </>
+                    )}
                   </button>
                   </Fragment>
                 );
               })}
 
+              {/*
+                The readout rides with the edge being dragged. Without it the
+                only place to read the new in-point is the inspector, which is
+                the wrong direction to be looking while your hand is here.
+              */}
+              {trim && (
+                <span
+                  style={{
+                    left: clamp(
+                      ((live.starts[trim.clip.id] ?? 0) + (trim.edge === "end" ? trim.span : 0)) *
+                        scale -
+                        60,
+                      0,
+                      Math.max(0, contentWidth - 150),
+                    ),
+                  }}
+                  className="pointer-events-none absolute top-1 z-20 whitespace-nowrap border border-[color:var(--hair-dark)] bg-ink-950/90 px-1.5 py-0.5 font-mono text-2xs tabular-nums text-paper-100"
+                >
+                  {trimReadout(trim.clip, trim.source, trim.span)}
+                </span>
+              )}
+
               {draggingClipId && dropIndex !== null && (
                 <div
                   className="pointer-events-none absolute inset-y-0 w-0.5 bg-signal-500"
-                  style={{ left: boundaryAt(dropIndex, timeline, starts, durations) * scale }}
+                  style={{ left: boundaryAt(dropIndex, timeline, live.starts, durations) * scale }}
                 />
               )}
             </div>
@@ -621,6 +897,7 @@ export function TimelineTracks({
               const span = audioTrackSpan(track, totalDuration);
               const ghosted = ghost("audio", track.id, track.startAt, span);
               const active = selection.kind === "audio" && selection.id === track.id;
+              const width = Math.max(14, ghosted.span * scale);
               return (
                 <div
                   key={track.id}
@@ -629,15 +906,20 @@ export function TimelineTracks({
                   className="relative border-t border-[color:var(--hair-dark)] bg-ink-900/40"
                 >
                   <div
-                    onPointerDown={(e) => startDrag(e, "move", "audio", track.id, track.startAt)}
+                    onPointerDown={(e) =>
+                      startDrag(e, {
+                        mode: "move",
+                        edge: "start",
+                        target: "audio",
+                        id: track.id,
+                        origin: track.startAt,
+                      })
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelect({ kind: "audio", id: track.id });
                     }}
-                    style={{
-                      left: ghosted.start * scale,
-                      width: Math.max(14, ghosted.span * scale),
-                    }}
+                    style={{ left: ghosted.start * scale, width }}
                     className={cn(
                       "absolute inset-y-[3px] flex cursor-grab touch-none items-center overflow-hidden border px-1",
                       track.muted && "opacity-40",
@@ -651,10 +933,38 @@ export function TimelineTracks({
                     <span className="truncate font-mono text-2xs text-paper-200">
                       {audioTrackLabel(track, mediaById, musicById)}
                     </span>
-                    <span
-                      onPointerDown={(e) => startDrag(e, "resize", "audio", track.id, span)}
-                      className="absolute inset-y-0 right-0 w-2 cursor-ew-resize transition-colors hover:bg-paper-100/40"
-                    />
+                    {width > lanes.grip * 2.5 && (
+                      <>
+                        <Grip
+                          side="start"
+                          width={lanes.grip}
+                          title="Drag to bring this track in later"
+                          onPointerDown={(e) =>
+                            startDrag(e, {
+                              mode: "resize",
+                              edge: "start",
+                              target: "audio",
+                              id: track.id,
+                              origin: track.startAt,
+                            })
+                          }
+                        />
+                        <Grip
+                          side="end"
+                          width={lanes.grip}
+                          title="Drag to play this track for longer"
+                          onPointerDown={(e) =>
+                            startDrag(e, {
+                              mode: "resize",
+                              edge: "end",
+                              target: "audio",
+                              id: track.id,
+                              origin: span,
+                            })
+                          }
+                        />
+                      </>
+                    )}
                   </div>
                 </div>
               );
@@ -674,6 +984,40 @@ export function TimelineTracks({
   );
 }
 
+/**
+ * An edge you can take hold of.
+ *
+ * The painted hairline matches the design's language; the hit zone around it is
+ * several times wider, because the thing being aimed at is a boundary with no
+ * width at all. On touch that zone is wide enough for a thumb without the
+ * handle looking like a button.
+ */
+function Grip({
+  side,
+  width,
+  title,
+  onPointerDown,
+}: {
+  side: "start" | "end";
+  width: number;
+  title: string;
+  onPointerDown: (event: React.PointerEvent) => void;
+}) {
+  return (
+    <span
+      onPointerDown={onPointerDown}
+      title={title}
+      style={{ width }}
+      className={cn(
+        "group/grip absolute inset-y-0 z-10 flex cursor-ew-resize touch-none items-stretch",
+        side === "start" ? "left-0 justify-start" : "right-0 justify-end",
+      )}
+    >
+      <span className="w-[3px] bg-paper-100/30 transition-colors group-hover/grip:bg-signal-500" />
+    </span>
+  );
+}
+
 export function audioTrackLabel(
   track: AudioTrack,
   mediaById: Map<string, MediaItemView>,
@@ -689,6 +1033,106 @@ export function audioTrackLabel(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Hand edits land on the same grids the rest of the document uses — two places
+ * for source time, matching the inspector, three for the film's clock,
+ * matching the auto-cut. Floats that don't round-trip through jsonb churn a
+ * revision every time anybody votes.
+ */
+function round2(seconds: number): number {
+  return Math.round(seconds * 100) / 100;
+}
+
+function round3(seconds: number): number {
+  return Math.round(seconds * 1000) / 1000;
+}
+
+/**
+ * What a trim handle commits, or null when the edge didn't actually move.
+ *
+ * A video's edges are points in the source file, so the spare footage either
+ * side is a real budget and the constraint is the recording. A photo has no
+ * source: both edges only set how long the still holds, and the head shortens
+ * from the front so the strip behaves the same way under the hand. Video whose
+ * length we haven't measured yet falls in with the photos — we can't claim
+ * there's more footage than we can see.
+ */
+function trimPatch(
+  clip: Clip,
+  source: number | null,
+  edge: "start" | "end",
+  delta: number,
+): Partial<Omit<Clip, "id">> | null {
+  const bound = clip.kind === "video" ? source ?? clip.trimEnd : null;
+
+  if (bound !== null) {
+    const end = clip.trimEnd ?? bound;
+    if (edge === "start") {
+      const value = round2(clamp(quantize(clip.trimStart + delta), 0, end - MIN_CLIP_SPAN));
+      return value === clip.trimStart ? null : { trimStart: value };
+    }
+    const value = round2(clamp(quantize(end + delta), clip.trimStart + MIN_CLIP_SPAN, bound));
+    return value === end ? null : { trimEnd: value };
+  }
+
+  const held = clipDuration(clip, source);
+  const value = round2(
+    Math.max(MIN_CLIP_SPAN, quantize(edge === "start" ? held - delta : held + delta)),
+  );
+  return value === clip.duration ? null : { duration: value };
+}
+
+/** Same numbers the drag is applying, said out loud. */
+function trimReadout(clip: Clip, source: number | null, span: number): string {
+  if (clip.kind !== "video" || source === null) return `Hold ${span.toFixed(1)}s`;
+  const end = clip.trimEnd ?? source;
+  return `In ${formatFine(clip.trimStart)} · Out ${formatFine(end)} — ${span.toFixed(1)}s of ${formatDuration(source)}`;
+}
+
+/**
+ * Trimming a block's head on the bench moves where it lands in the film and
+ * leaves its tail alone. It deliberately doesn't touch the in-point into the
+ * source — where playback begins is its own control in the inspector, and a
+ * nudge on the bench silently re-cueing a layer would be a nasty surprise.
+ */
+function headPatch(
+  startAt: number,
+  span: number,
+  head: number,
+): { startAt: number; duration: number } {
+  const end = startAt + span;
+  const start = Math.min(head, end - MIN_CLIP_SPAN);
+  return { startAt: round3(start), duration: Math.max(MIN_CLIP_SPAN, round3(end - start)) };
+}
+
+/**
+ * Clip geometry, optionally with one shot's length overridden for a drag in
+ * flight. Same walk as `clipStartTimes` — the base track is a sequence, so
+ * every position downstream of a trim depends on it.
+ */
+function layout(
+  timeline: TimelineDoc,
+  durations: Record<string, number | null>,
+  override: { id: string; span: number } | null,
+): { starts: Record<string, number>; spans: Record<string, number>; total: number } {
+  const starts: Record<string, number> = {};
+  const spans: Record<string, number> = {};
+  let cursor = 0;
+  timeline.clips.forEach((clip, index) => {
+    const span =
+      override && override.id === clip.id
+        ? override.span
+        : clipDuration(clip, durations[clip.mediaItemId]);
+    if (index > 0 && overlapsPrevious(clip.transitionIn)) {
+      cursor -= Math.min(clip.transitionDuration, cursor);
+    }
+    starts[clip.id] = cursor;
+    spans[clip.id] = span;
+    cursor += span;
+  });
+  return { starts, spans, total: Math.max(0, cursor) };
 }
 
 /** Roughly one label per 90px, on a round number of seconds. */

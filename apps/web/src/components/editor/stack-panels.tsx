@@ -1,44 +1,41 @@
 "use client";
 
-import { useState } from "react";
 import {
   MAX_LAYERS,
-  audioTrackSpan,
   defaultAudioTrack,
   defaultLayerFor,
-  formatDuration,
   type TimelineDoc,
   type TimelineOp,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
-import { audioTrackLabel } from "./timeline-tracks";
-import type { Selection } from "./selection";
 
 /**
  * The two stacks either side of the picture: what's laid over it, and what's
  * playing under it. Both are hand-built — the vote has no opinion about
  * either, beyond which track it made the bed.
+ *
+ * These used to be panels with a list and an "+ Add" fold. The lanes on the
+ * strip *are* the list, so only the picker half survived: it opens from
+ * "+ Layer" / "+ Sound" on the strip toolbar, where the thing being added
+ * lands. What the vote has a say in — which track is the bed — moved to the
+ * film's settings with the rest of what the whole crew shares.
  */
 
-export function LayerPanel({
+export function LayerPicker({
   timeline,
   media,
-  mediaById,
   playheadTime,
-  selection,
-  onSelect,
   onDispatch,
+  onDone,
 }: {
   timeline: TimelineDoc;
   media: MediaItemView[];
-  mediaById: Map<string, MediaItemView>;
   playheadTime: number;
-  selection: Selection;
-  onSelect: (selection: Selection) => void;
   onDispatch: (op: TimelineOp) => void;
+  /** Adding closes the popover — one pick is the whole errand. */
+  onDone: () => void;
 }) {
-  const [picking, setPicking] = useState(false);
   const footage = media.filter((m) => m.kind !== "audio" && m.status === "ready");
 
   /** New layers go on the lowest empty shelf, so they don't hide each other. */
@@ -48,130 +45,150 @@ export function LayerPanel({
     return 1;
   }
 
-  const ordered = [...timeline.layers].sort(
-    (a, b) => b.layer - a.layer || a.startAt - b.startAt,
-  );
-
   return (
     <section>
-      {/* The tab above is the heading; what's left is the one control. */}
-      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2">
-        <p className="font-mono text-2xs uppercase tracking-label text-ink-500">Pinned to the clock, not to a shot</p>
-        <button
-          onClick={() => setPicking((p) => !p)}
-          className="btn-quiet-dark focus-ring-dark shrink-0 px-0"
-        >
-          {picking ? "Close" : "+ Add"}
-        </button>
+      <div className="border-b border-[color:var(--hair-dark)] px-4 py-2">
+        <p className="font-mono text-2xs uppercase tracking-label text-ink-400">
+          Goes over the picture at the playhead
+        </p>
       </div>
 
-      {picking && (
-        <div className="max-h-56 overflow-y-auto border-b border-[color:var(--hair-dark)]">
-          {footage.length === 0 ? (
-            <p className="px-4 py-3 font-mono text-2xs text-ink-500">
-              Nothing in the pile is ready yet.
-            </p>
-          ) : (
-            footage.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  onDispatch({
-                    type: "layer.add",
-                    layer: defaultLayerFor(
-                      {
-                        mediaItemId: item.id,
-                        kind: item.kind === "video" ? "video" : "photo",
-                        durationSeconds: item.durationSeconds,
-                      },
-                      playheadTime,
-                      nextLane(),
-                    ),
-                  });
-                  setPicking(false);
-                }}
-                className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-ink-800"
-              >
-                {item.thumbnailUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={item.thumbnailUrl} alt="" className="h-8 w-12 shrink-0 object-cover" />
-                ) : (
-                  <span className="h-8 w-12 shrink-0 bg-ink-800 bg-hatch" />
-                )}
-                <span className="min-w-0 flex-1 truncate text-xs text-ink-200">
-                  {item.originalFilename}
-                </span>
-                <span className="eyebrow-light shrink-0">{item.kind}</span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-
-      {ordered.length === 0 ? (
-        <p className="px-4 py-3 text-[13px] leading-relaxed text-ink-400">
-          Nothing over the picture yet. Add a shot here and it floats above the cut — a reaction in
-          the corner, a still held over a wide.
-        </p>
-      ) : (
-        <div className="divide-y divide-[color:var(--hair-dark)]">
-          {ordered.map((layer) => {
-            const item = mediaById.get(layer.mediaItemId);
-            const active = selection.kind === "layer" && selection.id === layer.id;
-            return (
-              <button
-                key={layer.id}
-                onClick={() => onSelect({ kind: "layer", id: layer.id })}
-                className={cn(
-                  "flex min-h-[44px] w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
-                  active
-                    ? "bg-signal-900/40 text-paper-100"
-                    : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
-                )}
-              >
-                <span className="eyebrow-light w-6 shrink-0">L{layer.layer}</span>
-                <span className="min-w-0 flex-1 truncate">
-                  {item?.originalFilename ?? "Missing source"}
-                </span>
-                <span className="timecode shrink-0 text-2xs text-ink-400">
-                  {formatDuration(layer.startAt)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      <div className="max-h-72 overflow-y-auto">
+        {footage.length === 0 ? (
+          <p className="px-4 py-3 font-mono text-2xs text-ink-400">
+            Nothing in the pile is ready yet.
+          </p>
+        ) : (
+          footage.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => {
+                onDispatch({
+                  type: "layer.add",
+                  layer: defaultLayerFor(
+                    {
+                      mediaItemId: item.id,
+                      kind: item.kind === "video" ? "video" : "photo",
+                      durationSeconds: item.durationSeconds,
+                    },
+                    playheadTime,
+                    nextLane(),
+                  ),
+                });
+                onDone();
+              }}
+              className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-ink-800"
+            >
+              {item.thumbnailUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={item.thumbnailUrl} alt="" className="h-8 w-12 shrink-0 object-cover" />
+              ) : (
+                <span className="h-8 w-12 shrink-0 bg-ink-800 bg-hatch" />
+              )}
+              <span className="min-w-0 flex-1 truncate text-xs text-ink-200">
+                {item.originalFilename}
+              </span>
+              <span className="eyebrow-light shrink-0">{item.kind}</span>
+            </button>
+          ))
+        )}
+      </div>
     </section>
   );
 }
 
-export function SoundPanel({
+export function SoundPicker({
+  music,
+  media,
+  playheadTime,
+  onDispatch,
+  onDone,
+}: {
+  music: MusicItemView[];
+  media: MediaItemView[];
+  playheadTime: number;
+  onDispatch: (op: TimelineOp) => void;
+  onDone: () => void;
+}) {
+  const audioUploads = media.filter((m) => m.contentType.startsWith("audio/"));
+
+  return (
+    <section>
+      <div className="border-b border-[color:var(--hair-dark)] px-4 py-2">
+        <p className="font-mono text-2xs uppercase tracking-label text-ink-400">
+          Plays under the cut, from the playhead
+        </p>
+      </div>
+
+      <div className="max-h-72 overflow-y-auto">
+        {audioUploads.length === 0 && music.length === 0 ? (
+          <p className="px-4 py-3 font-mono text-2xs text-ink-400">
+            No sound in the pile yet. Drop an audio file or paste a link on the floor.
+          </p>
+        ) : (
+          <>
+            {audioUploads.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => {
+                  onDispatch({
+                    type: "audio.add",
+                    track: defaultAudioTrack({ mediaItemId: item.id }, playheadTime),
+                  });
+                  onDone();
+                }}
+                className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200"
+              >
+                <span className="eyebrow-light w-10 shrink-0">File</span>
+                <span className="min-w-0 flex-1 truncate">{item.originalFilename}</span>
+              </button>
+            ))}
+            {music.map((item) => (
+              <button
+                key={item.id}
+                disabled={!item.extractedAudioKey}
+                onClick={() => {
+                  onDispatch({
+                    type: "audio.add",
+                    track: defaultAudioTrack({ musicItemId: item.id }, playheadTime),
+                  });
+                  onDone();
+                }}
+                className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200 disabled:opacity-40 disabled:hover:bg-transparent"
+                title={item.extractedAudioKey ? undefined : "No audio file for this track yet"}
+              >
+                <span className="eyebrow-light w-10 shrink-0">Link</span>
+                <span className="min-w-0 flex-1 truncate">{item.title ?? item.url}</span>
+              </button>
+            ))}
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The music under the whole film, and whether the shots duck for it.
+ *
+ * Not a picker and not a list: it's one choice the whole crew shares, which is
+ * why it sits in the film's settings beside the pace rather than on the strip
+ * with the verbs.
+ */
+export function BedSettings({
   timeline,
   music,
   media,
-  mediaById,
-  musicById,
-  totalDuration,
-  playheadTime,
-  selection,
-  onSelect,
   onDispatch,
   onChooseBedMusic,
 }: {
   timeline: TimelineDoc;
   music: MusicItemView[];
   media: MediaItemView[];
-  mediaById: Map<string, MediaItemView>;
-  musicById: Map<string, MusicItemView>;
-  totalDuration: number;
-  playheadTime: number;
-  selection: Selection;
-  onSelect: (selection: Selection) => void;
   onDispatch: (op: TimelineOp) => void;
   /** Streaming beds go through the cut engine so the floor agrees with us. */
   onChooseBedMusic: (musicItemId: string | null) => void;
 }) {
-  const [picking, setPicking] = useState(false);
   const bed = timeline.audio.find((t) => t.role === "bed") ?? null;
   const audioUploads = media.filter((m) => m.contentType.startsWith("audio/"));
 
@@ -185,7 +202,13 @@ export function SoundPanel({
     } else {
       onDispatch({
         type: "audio.add",
-        track: { ...defaultAudioTrack({ mediaItemId }), role: "bed", volume: 0.8, fadeIn: 1, fadeOut: 2 },
+        track: {
+          ...defaultAudioTrack({ mediaItemId }),
+          role: "bed",
+          volume: 0.8,
+          fadeIn: 1,
+          fadeOut: 2,
+        },
       });
     }
   }
@@ -197,102 +220,8 @@ export function SoundPanel({
 
   return (
     <section>
-      {/* The tab above is the heading; what's left is the one control. */}
-      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2">
-        <p className="font-mono text-2xs uppercase tracking-label text-ink-500">A bed, plus anything you drop on top</p>
-        <button
-          onClick={() => setPicking((p) => !p)}
-          className="btn-quiet-dark focus-ring-dark shrink-0 px-0"
-        >
-          {picking ? "Close" : "+ Add"}
-        </button>
-      </div>
-
-      {picking && (
-        <div className="max-h-56 overflow-y-auto border-b border-[color:var(--hair-dark)]">
-          {audioUploads.length === 0 && music.length === 0 ? (
-            <p className="px-4 py-3 font-mono text-2xs text-ink-500">
-              No sound in the pile yet. Drop an audio file or paste a link on the floor.
-            </p>
-          ) : (
-            <>
-              {audioUploads.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    onDispatch({
-                      type: "audio.add",
-                      track: defaultAudioTrack({ mediaItemId: item.id }, playheadTime),
-                    });
-                    setPicking(false);
-                  }}
-                  className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200"
-                >
-                  <span className="eyebrow-light w-10 shrink-0">File</span>
-                  <span className="min-w-0 flex-1 truncate">{item.originalFilename}</span>
-                </button>
-              ))}
-              {music.map((item) => (
-                <button
-                  key={item.id}
-                  disabled={!item.extractedAudioKey}
-                  onClick={() => {
-                    onDispatch({
-                      type: "audio.add",
-                      track: defaultAudioTrack({ musicItemId: item.id }, playheadTime),
-                    });
-                    setPicking(false);
-                  }}
-                  className="flex min-h-[44px] w-full items-center gap-2 border-b border-[color:var(--hair-dark)] px-4 py-2 text-left text-xs text-ink-300 transition-colors last:border-b-0 hover:bg-ink-800 hover:text-paper-200 disabled:opacity-40 disabled:hover:bg-transparent"
-                  title={item.extractedAudioKey ? undefined : "No audio file for this track yet"}
-                >
-                  <span className="eyebrow-light w-10 shrink-0">Link</span>
-                  <span className="min-w-0 flex-1 truncate">{item.title ?? item.url}</span>
-                </button>
-              ))}
-            </>
-          )}
-        </div>
-      )}
-
-      {/* The stack itself */}
-      <div className="divide-y divide-[color:var(--hair-dark)]">
-        {timeline.audio.length === 0 && (
-          <p className="px-4 py-3 text-[13px] leading-relaxed text-ink-400">
-            Nothing playing under the cut.
-          </p>
-        )}
-        {timeline.audio.map((track) => {
-          const active = selection.kind === "audio" && selection.id === track.id;
-          return (
-            <button
-              key={track.id}
-              onClick={() => onSelect({ kind: "audio", id: track.id })}
-              className={cn(
-                "flex min-h-[44px] w-full items-center gap-2 px-4 py-2.5 text-left text-xs transition-colors",
-                active
-                  ? "bg-signal-900/40 text-paper-100"
-                  : "text-ink-300 hover:bg-ink-800 hover:text-paper-200",
-                track.muted && "opacity-50",
-              )}
-            >
-              <span className="eyebrow-light w-10 shrink-0">
-                {track.role === "bed" ? "Bed" : "Cue"}
-              </span>
-              <span className="min-w-0 flex-1 truncate">
-                {audioTrackLabel(track, mediaById, musicById)}
-              </span>
-              <span className="timecode shrink-0 text-2xs text-ink-400">
-                {formatDuration(audioTrackSpan(track, totalDuration))}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Choosing the bed — the one track the whole crew has a say in */}
-      <div className="border-t border-[color:var(--hair-dark)]">
-        <p className="eyebrow-light px-4 pt-3">The bed</p>
+      <div>
+        <p className="eyebrow-light px-4 pt-3">The music under it all</p>
         <div className="mt-1.5 divide-y divide-[color:var(--hair-dark)]">
           <BedChoice label="Dry" name="No score" active={!bed} onClick={playDry} />
           {audioUploads.map((item) => (
