@@ -55,6 +55,14 @@ const LANES = {
 const MIN_SCALE = 6;
 const MAX_SCALE = 140;
 
+/**
+ * Where the playhead lands when the strip turns the page, as a fraction of the
+ * visible width. Left of centre because the interesting part of a film is the
+ * part that hasn't played yet: a centred playhead spends half the strip on
+ * footage you've just watched.
+ */
+const PAGE_INSET = 0.15;
+
 /** A shot with the run of its file to itself — everything but a split half. */
 const FULL_SOURCE = { lo: 0, hi: Infinity };
 
@@ -122,6 +130,7 @@ export function TimelineTracks({
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const laneRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   /**
    * Where the shots sit as stored. The magnets snap to these rather than to the
@@ -382,15 +391,143 @@ export function TimelineTracks({
    */
   const live = layout(timeline, durations, trim && { id: trim.clip.id, span: trim.span });
 
+  const empty = timeline.clips.length === 0;
+
   const contentWidth = Math.max(320, Math.max(totalDuration, live.total) * scale);
+
+  // --- following the playhead ----------------------------------------------
+  /*
+   * The strip turns the page rather than panning under the playhead: a strip
+   * that scrolls continuously is a strip whose footage never stops moving, and
+   * a shot you can't read is a shot you can't decide about. So the view holds
+   * still until the playhead walks off the end of it, then turns the page.
+   *
+   * Following goes off the moment the strip is scrolled by hand — someone
+   * looking at a shot elsewhere while the film plays is exactly the person a
+   * strip that yanks itself back would ruin. It comes back at the next seek or
+   * selection, or when the playhead they went to look at leaves the view again
+   * under its own steam.
+   */
+  const follow = useRef(true);
+  const sawPlayhead = useRef(true);
+  /** Set across a scroll we caused, so it doesn't read as the person's. */
+  const selfScroll = useRef(false);
+
+  /*
+   * Where the strip is scrolled to, cached rather than measured.
+   *
+   * The clock publishes thirty times a second and the whole bench re-renders
+   * with it; asking the node for its scroll offset on each of those is a
+   * layout read in the middle of playback, and the answer is one we already
+   * know. Only two things move this box — a hand, which fires `scroll`, and
+   * the page turn below — so the cache stays exact as long as both write it.
+   */
+  const view = useRef({ left: 0, width: 0 });
+
+  useEffect(() => {
+    const box = scrollRef.current;
+    if (!box) return;
+    const measure = () => {
+      view.current = { left: box.scrollLeft, width: box.clientWidth };
+    };
+    measure();
+    // Fires once on observe, which is also how the cache gets its first width.
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+    // The strip only has a node once something has made the cut.
+  }, [empty]);
+
+  function playheadVisible(): boolean {
+    const x = playheadTime * scale;
+    return x >= view.current.left && x <= view.current.left + view.current.width;
+  }
+
+  /** Turn the page, putting the playhead an inset in from the left edge. */
+  function turnPageTo(time: number) {
+    const box = scrollRef.current;
+    if (!box) return;
+    const left = clamp(
+      time * scale - view.current.width * PAGE_INSET,
+      0,
+      Math.max(0, contentWidth - view.current.width),
+    );
+    // A turn that lands where we already are — the last page of a short film —
+    // never fires `scroll`, and the flag left standing would swallow the
+    // person's next one.
+    if (Math.abs(left - view.current.left) < 1) return;
+    selfScroll.current = true;
+    view.current.left = left;
+    box.scrollLeft = left;
+  }
+
+  function keepPlayheadInView() {
+    // A drag in flight owns the pointer and the view alike; moving the ground
+    // under it would send the block somewhere nobody asked for.
+    if (!scrollRef.current || dragRef.current) return;
+    const visible = playheadVisible();
+    if (follow.current) {
+      if (!visible) turnPageTo(playheadTime);
+      return;
+    }
+    // Following is off. Coming back to the playhead is how it's re-armed
+    // without a click: once it's in view again, its next exit is the film
+    // leaving *you* behind rather than the strip dragging you away.
+    if (visible) {
+      sawPlayhead.current = true;
+      return;
+    }
+    if (sawPlayhead.current) {
+      follow.current = true;
+      turnPageTo(playheadTime);
+    }
+  }
+
+  /** A seek or a selection is the person pointing at a moment: go there. */
+  function resumeFollow() {
+    follow.current = true;
+    sawPlayhead.current = true;
+  }
+
+  useEffect(keepPlayheadInView, [playheadTime, scale]);
+
+  // Picking a shot is asking to be shown it, whether it was picked here or
+  // from the keyboard.
+  const selectionKey = selection.kind === "none" ? "none" : `${selection.kind}:${selection.id}`;
+  useEffect(() => {
+    resumeFollow();
+    keepPlayheadInView();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionKey]);
+
+  function onScroll() {
+    const box = scrollRef.current;
+    if (!box) return;
+    view.current.left = box.scrollLeft;
+    if (selfScroll.current) {
+      selfScroll.current = false;
+      return;
+    }
+    /*
+     * Everything else is a hand on the strip, including the scroll the browser
+     * makes for itself when zooming out shortens the strip under an
+     * over-scrolled box. That one needs no special case: it pulls the view
+     * towards the end the playhead is already near, so it leaves the playhead
+     * in sight, and a playhead in sight re-arms the following the moment the
+     * film walks off the edge again.
+     */
+    follow.current = false;
+    sawPlayhead.current = playheadVisible();
+  }
 
   function seekFromEvent(event: React.MouseEvent) {
     const box = laneRef.current?.getBoundingClientRect();
     if (!box) return;
+    resumeFollow();
     onSeek(clamp((event.clientX - box.left) / scale, 0, totalDuration));
   }
 
-  if (timeline.clips.length === 0) {
+  if (empty) {
     return (
       <div className="border border-[color:var(--hair-dark)] bg-ink-850 bg-hatch px-6 py-12 text-center">
         <p className="eyebrow-light">Empty strip</p>
@@ -526,7 +663,11 @@ export function TimelineTracks({
           ))}
         </div>
 
-        <div className="scrollbar-thin scrollbar-dark touch-scroll-x min-w-0 flex-1 overflow-x-auto">
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          className="scrollbar-thin scrollbar-dark touch-scroll-x min-w-0 flex-1 overflow-x-auto"
+        >
           <div ref={laneRef} className="relative" style={{ width: contentWidth }}>
             {/*
               Scene markers, sitting above the ruler because a scene is a fact
