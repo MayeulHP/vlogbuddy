@@ -5,7 +5,7 @@ import path from "node:path";
 import { db, eq, musicItems } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, uploadFile } from "../storage";
-import { probe } from "../ffmpeg";
+import { audioPeaks, probe } from "../ffmpeg";
 import { analyzeBeats } from "../beats";
 import { notifyMusicUpdated, requestCutResync } from "../notify";
 
@@ -60,6 +60,9 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
     // its cuts on them. Best-effort — no tempo just means no beat-snapping.
     const beats = await analyzeBeats(localPath);
 
+    // And its shape, for the audio lane on the bench — same pass, same file.
+    const peaks = await audioPeaks(localPath);
+
     const key = buildStorageKey(item.vlogId, "audio", item.id, audioFile);
     await uploadFile(key, localPath, "audio/mp4");
 
@@ -73,6 +76,7 @@ export async function extractAudio(job: ExtractAudioJob): Promise<void> {
         beatOffsetSeconds: beats?.beatOffsetSeconds ?? null,
         beatTimes: beats?.beatTimes ?? null,
         beatConfidence: beats?.confidence ?? null,
+        peaks,
         error: null,
       })
       .where(eq(musicItems.id, item.id));

@@ -7,9 +7,12 @@ import { and, asc, db, eq, mediaItems, members } from "@vlogbuddy/db";
 import { env } from "../env";
 import { buildStorageKey, downloadToFile, uploadFile } from "../storage";
 import {
+  audioPeaks,
+  generateFilmstrip,
   generatePhotoProxy,
   generateProxy,
   generateThumbnail,
+  planFilmstrip,
   probe,
   PHOTO_PROXY_MAX_EDGE,
   type ProbeResult,
@@ -64,6 +67,9 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
 
     let thumbnailKey: string | null = null;
     let proxyKey: string | null = null;
+    let filmstripKey: string | null = null;
+    let filmstripFrames: number | null = null;
+    let filmstripIntervalSeconds: number | null = null;
     let width = info?.width ?? null;
     let height = info?.height ?? null;
 
@@ -71,6 +77,10 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
     // link, so it gets the same beat analysis. Best-effort: a file we can't
     // read a tempo off is simply a film the auto-cut won't cut to the music.
     const beats = isAudio ? await analyzeBeats(localOriginal) : null;
+
+    // The envelope the audio lane draws. Same best-effort footing as the beat
+    // grid: no peaks just means the lane stays the flat block it always was.
+    const peaks = isAudio ? await audioPeaks(localOriginal) : null;
 
     // Audio has no frames to show; the UI renders an icon instead.
     if (!isAudio) {
@@ -93,6 +103,23 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         await uploadFile(proxyKey, proxyPath, "video/mp4");
       } catch (err) {
         console.warn(`[process-media] proxy failed for ${item.id}:`, (err as Error).message);
+      }
+
+      // The contact sheet the strip paints across the shot. Built from the
+      // original rather than the proxy so it survives a proxy that failed.
+      const plan = planFilmstrip(info?.durationSeconds ?? null);
+      if (plan) {
+        const stripPath = path.join(workDir, "filmstrip.jpg");
+        try {
+          await generateFilmstrip(localOriginal, stripPath, plan);
+          filmstripKey = buildStorageKey(item.vlogId, "filmstrip", item.id, "filmstrip.jpg");
+          await uploadFile(filmstripKey, stripPath, "image/jpeg");
+          filmstripFrames = plan.frames;
+          filmstripIntervalSeconds = plan.intervalSeconds;
+        } catch (err) {
+          filmstripKey = null;
+          console.warn(`[process-media] filmstrip failed for ${item.id}:`, (err as Error).message);
+        }
       }
     }
 
@@ -168,6 +195,10 @@ export async function processMedia(job: ProcessMediaJob): Promise<void> {
         status: "ready",
         thumbnailKey,
         proxyKey,
+        filmstripKey,
+        filmstripFrames,
+        filmstripIntervalSeconds,
+        peaks,
         width,
         height,
         durationSeconds: info?.durationSeconds ?? null,

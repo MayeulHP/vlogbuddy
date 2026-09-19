@@ -8,6 +8,8 @@
     "start": "tsx --env-file-if-exists=../../.env src/index.ts",
     "render-check": "tsx src/render-check.ts",
     "backfill-photo-proxies": "tsx --env-file-if-exists=../../.env src/backfill-photo-proxies.ts",
+    "backfill-dimensions": "tsx --env-file-if-exists=../../.env src/backfill-dimensions.ts",
+    "backfill-strip-assets": "tsx --env-file-if-exists=../../.env src/backfill-strip-assets.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
