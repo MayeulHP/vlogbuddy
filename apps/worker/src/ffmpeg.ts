@@ -95,7 +95,18 @@ export async function probe(filePath: string): Promise<ProbeResult> {
     if (!Number.isNaN(parsed.getTime())) capturedAt = parsed;
   }
 
-  const rotation = Math.abs(video?.side_data_list?.[0]?.rotation ?? 0) % 180;
+  /**
+   * The Display Matrix is not reliably the first side-datum.
+   *
+   * A recent iPhone or Samsung files Ambient Viewing Environment ahead of it,
+   * and reading `[0]` then finds no rotation at all — so a portrait clip is
+   * stored as landscape, and every frame of it is letterboxed on its side for
+   * the rest of the vlog's life. Match on the entry that carries the field.
+   */
+  const rotation =
+    Math.abs(
+      video?.side_data_list?.find((entry) => typeof entry.rotation === "number")?.rotation ?? 0,
+    ) % 180;
 
   // An iPhone files the fix under the QuickTime key; everything else that
   // bothers writes the bare `©xyz` atom, which FFmpeg surfaces as `location`.
