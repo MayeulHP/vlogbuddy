@@ -886,14 +886,33 @@ export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc
   // gives a shot arriving from the vote its whole recorded length, and nothing
   // here comes along afterwards to cut it down.
   if (!input.settings.enabled) return doc;
-  if (doc.clips.length === 0 || doc.clips.length !== input.cut.length) return doc;
+  if (doc.clips.length === 0) return doc;
   // Nothing in this film is ours any more. Stated outright rather than left to
   // fall out of the per-clip checks, because the scene pass would otherwise
   // hand the auto-cut an opinion about a document — one written before any of
   // this existed, or one cut entirely by hand — that has told it to keep away.
   if (doc.clips.every((c) => c.auto.length === 0)) return doc;
 
-  const runs = detectScenes(input.cut);
+  /**
+   * The cut is a list of *media*; the base track is a list of *shots*, and
+   * since `clip.split` the two are no longer the same length — both halves of
+   * a split shot are the one entry. Everything below indexes by shot, so the
+   * entries are expanded to match rather than the whole pass standing down:
+   * comparing the two lengths, which is what this used to do, meant the
+   * auto-cut went dead for the whole film the moment anybody split anything.
+   *
+   * A clip pointing at something that isn't in the cut means the document
+   * hasn't been reconciled yet. Nothing here would be right, so don't guess.
+   */
+  const cut: CutEntry[] = [];
+  const byMedia = new Map(input.cut.map((e) => [e.mediaItemId, e]));
+  for (const clip of doc.clips) {
+    const entry = byMedia.get(clip.mediaItemId);
+    if (!entry) return doc;
+    cut.push(entry);
+  }
+
+  const runs = detectScenes(cut);
   const scenes = reconcileScenes(doc, runs);
   const runOf: SceneBreak[] = [];
   const sceneOf: Scene[] = [];
@@ -912,7 +931,7 @@ export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc
   // everything downstream of it snaps against where that really leaves us.
   let cursor = 0;
   const clips = doc.clips.map((clip, i) => {
-    const entry = input.cut[i];
+    const entry = cut[i];
     const run = runOf[i];
     const owns = new Set(clip.auto);
 
@@ -933,7 +952,7 @@ export function runDirector(doc: TimelineDoc, input: DirectorInput): TimelineDoc
 
     const next = applyToClip(
       clip,
-      planClip(entry, i, input.cut, run, sceneOf[i], input, startsAt, grid, shot),
+      planClip(entry, i, cut, run, sceneOf[i], input, startsAt, grid, shot),
     );
     cursor = round(startsAt + clipDuration(next, entry.durationSeconds));
     return next;

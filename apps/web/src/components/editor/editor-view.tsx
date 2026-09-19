@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import {
   applyTimelineOp,
+  canSplitAt,
   clipSpeed,
   clipStartTimes,
   formatDuration,
@@ -127,6 +128,12 @@ export function EditorView({
     [timeline, durations],
   );
 
+  /**
+   * Where every shot's first frame lands. Read by the keys and handed to the
+   * inspector, which needs it to say where the playhead is *within* the shot.
+   */
+  const clipStarts = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
+
   // Remote edits from other people in the room.
   useSocketEvent(
     socket,
@@ -232,8 +239,11 @@ export function EditorView({
         media={mediaById.get(selected.mediaItemId) ?? null}
         index={timeline.clips.findIndex((c) => c.id === selected.id)}
         total={timeline.clips.length}
+        playheadTime={playheadTime}
+        clipStart={clipStarts[selected.id] ?? 0}
         onDispatch={dispatch}
         onReorder={(toIndex) => reorderClip(selected.id, toIndex)}
+        onSplit={() => splitClip(selected.id)}
         onLiftOut={() => liftClipOut(selected.id)}
       />
     ) : (
@@ -265,9 +275,6 @@ export function EditorView({
         }}
       />
     ) : null;
-
-  /** The phone's sheet shows the thing you just tapped, not the whole rack. */
-  const clipStarts = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
 
   /** A frame, near enough — the render's fps isn't on the client. */
   const FRAME = 1 / 30;
@@ -356,6 +363,31 @@ export function EditorView({
     }
   }
 
+  /**
+   * Cut the selected shot in two where the playhead stands.
+   *
+   * Unlike a trim this stays in the document: `selections` holds one row per
+   * media item, so the floor has no way to say "twice, at these two lengths".
+   * `reconcileClips` groups the halves under their shared media instead, which
+   * is what keeps both of them through the next vote.
+   */
+  function splitClip(clipId: string) {
+    const clip = timeline.clips.find((c) => c.id === clipId);
+    if (!clip) return;
+    const at = round3(playheadTime - (clipStarts[clip.id] ?? 0));
+    // Same test the reducer applies, so a press that would leave a sliver does
+    // nothing at all rather than half-happening.
+    if (!canSplitAt(clip, at)) return;
+
+    const newClipId = globalThis.crypto.randomUUID();
+    dispatch({ type: "clip.split", clipId: clip.id, at, newClipId });
+    // Land on the second half. The playhead is already sitting on its first
+    // frame, it's the piece the gesture was reaching for — you split to drop or
+    // move what comes *after* — and nothing else on the bench would point you
+    // at a shot that didn't exist a moment ago.
+    choose({ kind: "clip", id: newClipId });
+  }
+
   function stepSelection(delta: -1 | 1) {
     if (timeline.clips.length === 0) return;
     const index =
@@ -423,6 +455,9 @@ export function EditorView({
         break;
       case "markOut":
         markClip("out");
+        break;
+      case "split":
+        if (selection.kind === "clip") splitClip(selection.id);
         break;
       case "moveEarlier":
         if (selection.kind === "clip" && index !== -1) reorderClip(selection.id, big ? 0 : index - 1);

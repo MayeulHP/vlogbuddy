@@ -19,6 +19,7 @@ export type KeyAction =
   | "selectNext"
   | "markIn"
   | "markOut"
+  | "split"
   | "moveEarlier"
   | "moveLater"
   | "toggleMute"
@@ -85,6 +86,13 @@ export const KEYMAP: KeyEntry[] = [
     what: "End this shot at the playhead",
     section: "Editing",
     match: (e) => e.key.toLowerCase() === "o",
+  },
+  {
+    id: "split",
+    keys: "S",
+    what: "Cut this shot in two where the playhead is",
+    section: "Editing",
+    match: (e) => e.key.toLowerCase() === "s",
   },
   {
     id: "moveEarlier",

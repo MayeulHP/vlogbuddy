@@ -8,6 +8,7 @@ import {
   TRANSITIONS,
   TRANSITION_GLYPHS,
   TRANSITION_LABELS,
+  canSplitAt,
   clipDuration,
   clipSourceSpan,
   formatDuration,
@@ -52,14 +53,21 @@ export function ClipInspector({
   media,
   index,
   total,
+  playheadTime,
+  clipStart,
   onDispatch,
   onReorder,
+  onSplit,
   onLiftOut,
 }: {
   clip: Clip;
   media: MediaItemView | null;
   index: number;
   total: number;
+  /** Where the bench's playhead is, in film seconds. */
+  playheadTime: number;
+  /** Where this shot's first frame lands, so the playhead can be read against it. */
+  clipStart: number;
   onDispatch: (op: TimelineOp) => void;
   /**
    * Where this shot sits in the running order, and whether it's in at all,
@@ -67,10 +75,19 @@ export function ClipInspector({
    * table, so a change made to the document here is undone by the next vote.
    */
   onReorder: (toIndex: number) => void;
+  onSplit: () => void;
   onLiftOut: () => void;
 }) {
   const sourceDuration = media?.durationSeconds ?? null;
   const effective = clipDuration(clip, sourceDuration);
+
+  /**
+   * Where a split would land, in seconds into this shot. The reducer refuses
+   * anything that would leave a flash frame either side; the button greys out
+   * on the very same test rather than letting the press do nothing.
+   */
+  const splitAt = Math.round((playheadTime - clipStart) * 1000) / 1000;
+  const canSplit = canSplitAt(clip, splitAt);
 
   const trimmedAway = sourceDuration === null ? 0 : sourceDuration - effective;
 
@@ -231,6 +248,26 @@ export function ClipInspector({
             />
           </label>
         )}
+
+        {/*
+          Trimming takes the ends off a shot; this is the only way to lose a
+          stretch out of its middle, or to put its second half somewhere else.
+          The playhead is the aim, so the only thing left to say is whether it
+          is somewhere the cut can actually land.
+        */}
+        <div>
+          <button onClick={onSplit} disabled={!canSplit} className="btn-outline-dark w-full">
+            Split at the playhead
+            <span className="ml-1.5 font-mono text-2xs text-ink-400" aria-hidden>
+              S
+            </span>
+          </button>
+          <p className="mt-1.5 font-mono text-2xs leading-relaxed text-ink-500">
+            {canSplit
+              ? `Cuts this shot in two ${formatDuration(splitAt)} in. Both halves stay in the cut, and you can move or take out either one.`
+              : "Park the playhead inside this shot, clear of both ends, to cut it in two."}
+          </p>
+        </div>
 
         {/*
           The move, for stills only. A photograph that drifts holds an eye the

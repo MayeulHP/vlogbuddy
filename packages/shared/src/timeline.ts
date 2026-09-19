@@ -5,6 +5,7 @@ import {
   DEFAULT_PHOTO_DURATION,
   DEFAULT_TRANSITION_DURATION,
   MAX_SPEED,
+  MIN_CLIP_SPAN,
   MIN_SPEED,
   MOTIONS,
   PACE_PRESETS,
@@ -399,6 +400,45 @@ export function clipDuration(clip: Clip, sourceDuration?: number | null): number
   return Math.max(0.05, Math.round((span / speed) * 1000) / 1000);
 }
 
+/**
+ * Every number this file generates is rounded here, at the point of
+ * generation, for the reason the auto-cut rounds its own: documents are
+ * compared by value to decide whether to write at all, and a float that won't
+ * round-trip through jsonb churns a revision forever.
+ */
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/**
+ * The on-screen length a split has to divide, or null for a shot that can't be
+ * split at all.
+ *
+ * A video whose out-point is still open hasn't been probed yet, so there's no
+ * second half to describe — we'd be inventing the length of something we
+ * haven't measured. Screen seconds, like the playhead and like a title's
+ * `start`, so a shot running at 2× splits where the playhead is rather than
+ * where the file is.
+ */
+export function splittableSpan(clip: Clip): number | null {
+  if (clip.kind === "photo") return clip.duration;
+  if (clip.trimEnd === null) return null;
+  return round3((clip.trimEnd - clip.trimStart) / clipSpeed(clip));
+}
+
+/**
+ * Would a split at `at` seconds into this shot leave two shots worth having?
+ *
+ * The reducer's own test, exported so the button that dispatches the op greys
+ * out on exactly the rule that would refuse it — an enabled control that does
+ * nothing is worse than one that admits it can't.
+ */
+export function canSplitAt(clip: Clip, at: number): boolean {
+  const span = splittableSpan(clip);
+  if (span === null) return false;
+  return at >= MIN_CLIP_SPAN && span - at >= MIN_CLIP_SPAN;
+}
+
 /** Does this clip ask for anything the plain normalise chain doesn't do? */
 export function isGraded(clip: Clip): boolean {
   return (
@@ -607,21 +647,32 @@ export function defaultClipFor(entry: CutEntry): Clip {
 }
 
 /**
- * Rebuilds `clips` to match `cut`, reusing the existing clip for any media that
- * is still in. Returns the *same object* when nothing would change, so callers
- * can skip a write and avoid churning revisions on every vote.
+ * Rebuilds `clips` to match `cut`, reusing the existing clips for any media
+ * that is still in. Returns the *same object* when nothing would change, so
+ * callers can skip a write and avoid churning revisions on every vote.
+ *
+ * One media item can hold *several* clips — `clip.split` cuts a shot in two and
+ * both halves point at the same file. So the reuse is by group, in document
+ * order, and a default clip is only invented for a cut entry with no clips at
+ * all. Keeping one clip per media item here is what would make the second half
+ * of every split vanish on the next vote, which is why splitting couldn't ship
+ * without this.
  *
  * Only the base track is reconciled — the same photo can be in the cut *and*
  * pinned over a later shot as a layer, and the vote has no opinion about the
  * second one.
  */
 export function reconcileClips(doc: TimelineDoc, cut: CutEntry[]): TimelineDoc {
-  const existing = new Map<string, Clip>();
+  const existing = new Map<string, Clip[]>();
   for (const clip of doc.clips) {
-    if (!existing.has(clip.mediaItemId)) existing.set(clip.mediaItemId, clip);
+    const group = existing.get(clip.mediaItemId);
+    if (group) group.push(clip);
+    else existing.set(clip.mediaItemId, [clip]);
   }
 
-  const clips = cut.map((entry) => existing.get(entry.mediaItemId) ?? defaultClipFor(entry));
+  const clips = cut.flatMap(
+    (entry) => existing.get(entry.mediaItemId) ?? [defaultClipFor(entry)],
+  );
 
   const unchanged =
     clips.length === doc.clips.length && clips.every((clip, i) => clip === doc.clips[i]);
@@ -642,6 +693,21 @@ export const timelineOpSchema = z.discriminatedUnion("type", [
   // where the auto-cut filed the shot, and the only thing a person changes
   // about a scene is what it's called.
   z.object({ type: z.literal("clip.update"), clipId: z.string(), patch: clipSchema.partial().omit({ id: true, sceneId: true }) }),
+  /**
+   * Cut a shot in two at `at` seconds into what it plays for, so the middle can
+   * be dropped or the halves moved apart.
+   *
+   * The new id is the *caller's* to mint: the reducer runs three times over the
+   * same op — optimistically in the browser, authoritatively in the socket
+   * handler, and again in server actions — and an id generated inside it would
+   * come out different each time.
+   */
+  z.object({
+    type: z.literal("clip.split"),
+    clipId: z.string(),
+    at: z.number().positive(),
+    newClipId: z.string(),
+  }),
   z.object({ type: z.literal("title.add"), clipId: z.string(), title: titleOverlaySchema }),
   z.object({ type: z.literal("title.remove"), clipId: z.string(), titleId: z.string() }),
   z.object({
@@ -727,6 +793,69 @@ export function applyTimelineOp(doc: TimelineDoc, op: TimelineOp): TimelineDoc {
       next.clips = next.clips.map((c) =>
         c.id === op.clipId ? clearAutoFor({ ...c, ...op.patch }, patched) : c,
       );
+      break;
+    }
+    case "clip.split": {
+      const index = doc.clips.findIndex((c) => c.id === op.clipId);
+      if (index === -1) break;
+      const clip = doc.clips[index];
+
+      const span = splittableSpan(clip);
+      if (span === null) return doc;
+
+      const at = round3(op.at);
+      // Too close to either edge and one half would be a flash frame. The
+      // document comes back untouched, so an ill-aimed press is a no-op rather
+      // than a sliver — and `updatedAt` doesn't move either.
+      if (!canSplitAt(clip, at)) return doc;
+
+      // Back onto the file's clock to place the cut in the source.
+      const cutAt = round3(clip.trimStart + at * clipSpeed(clip));
+      const sourceEnd = clip.trimEnd ?? cutAt;
+
+      const headTitles = clip.titles.filter((t) => t.start < at);
+      const tailTitles = clip.titles
+        .filter((t) => t.start >= at)
+        .map((t) => ({ ...t, start: round3(t.start - at) }));
+      /**
+       * Setting a boundary by hand is a timing decision, so the auto-cut stops
+       * owning the length of either half — otherwise the next vote would
+       * re-time both back to the same window and the split would be a cut
+       * through nothing. Carrying a title onto the second half is a hand edit
+       * of the same kind, and only counts when one actually moved.
+       *
+       * `transition` deliberately stays where it was. The tail comes in on a
+       * hard cut because dissolving a shot into itself is never what splitting
+       * it meant, and that's also exactly what the auto-cut would choose for a
+       * shot in the middle of a scene — so there is nothing here to overrule.
+       */
+      const touched = ["trimStart", "trimEnd", "duration", ...(tailTitles.length > 0 ? ["titles"] : [])];
+
+      const head = clearAutoFor(
+        {
+          ...clip,
+          ...(clip.kind === "video"
+            ? { trimEnd: cutAt, duration: round3(cutAt - clip.trimStart) }
+            : { duration: at }),
+          titles: headTitles,
+        },
+        touched,
+      );
+      const tail = clearAutoFor(
+        {
+          ...clip,
+          id: op.newClipId,
+          ...(clip.kind === "video"
+            ? { trimStart: cutAt, duration: round3(sourceEnd - cutAt) }
+            : { duration: round3(span - at) }),
+          transitionIn: "cut" as const,
+          transitionDuration: DEFAULT_TRANSITION_DURATION,
+          titles: tailTitles,
+        },
+        touched,
+      );
+
+      next.clips.splice(index, 1, head, tail);
       break;
     }
     case "title.add": {

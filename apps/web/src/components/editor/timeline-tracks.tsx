@@ -55,6 +55,9 @@ const LANES = {
 const MIN_SCALE = 6;
 const MAX_SCALE = 140;
 
+/** A shot with the run of its file to itself — everything but a split half. */
+const FULL_SOURCE = { lo: 0, hi: Infinity };
+
 /**
  * What the strip toolbar can add. One order, one set of words, used by the
  * buttons here and by the sheet the bench puts up on a phone — so the two
@@ -127,6 +130,49 @@ export function TimelineTracks({
    */
   const committed = useMemo(() => clipStartTimes(timeline, durations), [timeline, durations]);
   const musicById = useMemo(() => new Map(music.map((m) => [m.id, m])), [music]);
+
+  /**
+   * How far into its source each shot is allowed to reach.
+   *
+   * A file usually has exactly one shot in the cut and the answer is "all of
+   * it". A shot that has been split shares its file with its other half, and
+   * the footage on the far side of that boundary belongs to the sibling: drawn
+   * as spare it would read as "there's more where that came from", and dragged
+   * into it the two halves would play the same seconds twice.
+   *
+   * Siblings are ordered by where they sit in the *file*, never in the strip —
+   * a half moved somewhere else in the running order still owns its own
+   * seconds.
+   */
+  const sourceWindows = useMemo(() => {
+    const shots = new Map<string, number>();
+    for (const clip of timeline.clips) {
+      shots.set(clip.mediaItemId, (shots.get(clip.mediaItemId) ?? 0) + 1);
+    }
+
+    const windows = new Map<string, { lo: number; hi: number }>();
+    timeline.clips.forEach((clip, index) => {
+      const source = durations[clip.mediaItemId] ?? null;
+      const full = { lo: 0, hi: source ?? Infinity };
+      if (clip.kind !== "video" || (shots.get(clip.mediaItemId) ?? 0) < 2) {
+        windows.set(clip.id, full);
+        return;
+      }
+      const end = clip.trimEnd ?? full.hi;
+      let { lo, hi } = full;
+      timeline.clips.forEach((other, i) => {
+        if (i === index || other.mediaItemId !== clip.mediaItemId) return;
+        const otherEnd = other.trimEnd ?? full.hi;
+        if (otherEnd <= clip.trimStart) lo = Math.max(lo, otherEnd);
+        else if (other.trimStart >= end) hi = Math.min(hi, other.trimStart);
+      });
+      windows.set(clip.id, { lo, hi });
+    });
+    return windows;
+  }, [timeline.clips, durations]);
+
+  /** Everything, for a shot whose file is nobody else's. */
+  const windowFor = (clipId: string) => sourceWindows.get(clipId) ?? FULL_SOURCE;
 
   /** The scene being renamed, and the words so far. */
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -225,7 +271,13 @@ export function TimelineTracks({
         // A trim that rounds to nothing dispatches nothing: `clip.update`
         // hands the shot's timing away from the auto-cut for good, and a
         // fumbled grab shouldn't be able to do that silently.
-        const patch = trimPatch(clip, durations[clip.mediaItemId] ?? null, current.edge, current.delta);
+        const patch = trimPatch(
+          clip,
+          durations[clip.mediaItemId] ?? null,
+          current.edge,
+          current.delta,
+          windowFor(clip.id),
+        );
         if (patch) onDispatch({ type: "clip.update", clipId: clip.id, patch });
         return;
       }
@@ -318,7 +370,7 @@ export function TimelineTracks({
     const clip = timeline.clips.find((c) => c.id === drag.id);
     if (!clip) return null;
     const source = durations[clip.mediaItemId] ?? null;
-    const patch = trimPatch(clip, source, drag.edge, drag.delta);
+    const patch = trimPatch(clip, source, drag.edge, drag.delta, windowFor(clip.id));
     const shown = patch ? { ...clip, ...patch } : clip;
     return { clip: shown, edge: drag.edge, source, span: clipDuration(shown, source) };
   })();
@@ -704,10 +756,12 @@ export function TimelineTracks({
                 // ghost either side of the shot: now that the edges are
                 // draggable it's the budget you're dragging into, and it
                 // shrinks as you spend it.
-                const headSpare = shown.kind === "video" ? shown.trimStart : 0;
+                const reach = windowFor(clip.id);
+                const headSpare =
+                  shown.kind === "video" ? Math.max(0, shown.trimStart - reach.lo) : 0;
                 const tailSpare =
                   shown.kind === "video" && source !== null
-                    ? Math.max(0, source - (shown.trimEnd ?? source))
+                    ? Math.max(0, Math.min(source, reach.hi) - (shown.trimEnd ?? source))
                     : 0;
                 // A shot whose length is nobody's but yours. Worth marking:
                 // the auto-cut will never re-time it again, even on a re-cut.
@@ -1064,16 +1118,20 @@ function trimPatch(
   source: number | null,
   edge: "start" | "end",
   delta: number,
+  /** The stretch of source this shot owns; everything, unless it was split. */
+  reach: { lo: number; hi: number } = FULL_SOURCE,
 ): Partial<Omit<Clip, "id">> | null {
   const bound = clip.kind === "video" ? source ?? clip.trimEnd : null;
 
   if (bound !== null) {
     const end = clip.trimEnd ?? bound;
     if (edge === "start") {
-      const value = round2(clamp(quantize(clip.trimStart + delta), 0, end - MIN_CLIP_SPAN));
+      const value = round2(clamp(quantize(clip.trimStart + delta), reach.lo, end - MIN_CLIP_SPAN));
       return value === clip.trimStart ? null : { trimStart: value };
     }
-    const value = round2(clamp(quantize(end + delta), clip.trimStart + MIN_CLIP_SPAN, bound));
+    const value = round2(
+      clamp(quantize(end + delta), clip.trimStart + MIN_CLIP_SPAN, Math.min(bound, reach.hi)),
+    );
     return value === end ? null : { trimEnd: value };
   }
 
