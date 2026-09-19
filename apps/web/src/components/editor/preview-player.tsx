@@ -14,6 +14,7 @@ import {
   layersInPaintOrder,
   movesFrame,
   overlapsPrevious,
+  previewFrame,
   transitionOverlap,
   timelineDuration,
   type AudioTrack,
@@ -492,6 +493,7 @@ export function PreviewPlayer({
     );
   }
 
+  const frame = previewFrame(format);
   const src = active ? pictureSrc(active.clip, activeMedia) : null;
   const fx = transition ? transitionStyles(transition.effect, transition.progress) : null;
 
@@ -535,22 +537,41 @@ export function PreviewPlayer({
   return (
     <div className="flex min-h-0 flex-col border border-[color:var(--hair-dark)] bg-ink-950">
       {/*
-        The picture takes the height the strip leaves it and keeps its shape.
+        The picture fits the stage on both axes and keeps the film's shape
+        doing it, because a layer is stored as a *fraction of the frame* — a
+        preview box that isn't the render's shape puts an inset somewhere the
+        render won't, and someone would lay a title out against a lie.
 
-        Height-bound rather than width-bound — `h-full w-auto` against the
-        flexible row — because a layer is stored as a *fraction of the frame*,
-        so a preview box that isn't the render's shape would put an inset
-        somewhere the render won't. That also means growing the window grows
-        the picture, which is the whole point of it fitting.
+        Height-bound alone doesn't get there. `aspect-ratio` against a
+        definite height hands `max-width` the width and nothing else: the
+        clamp lands on one axis, the height stays where it was, and a 16:9
+        film comes out 1.32:1 on a tall window. So the stage is made a size
+        container and the box does the contain-fit arithmetic itself — the
+        width is the lesser of the stage's width and the width the stage's
+        height affords. Height still leads wherever there's room for it,
+        which is the whole point of a bigger window giving a bigger picture.
+
+        Below `xl` the page scrolls and there is no stage height to fit
+        into, so the box stays width-bound as it has always been there.
+
+        It is a query container in its own right as well: a title's size is
+        a fraction of the *frame* (`cqh`, below), not of the stage the frame
+        is floating in.
 
         Clipped, because FFmpeg crops a layer at the frame edge and the
         preview has to agree — a tall portrait inset otherwise spills out
         over the transport.
       */}
-      <div className="flex min-h-0 flex-1 items-center justify-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center xl:[container-type:size]">
       <div
-        style={{ aspectRatio: frameAspectCss(format) }}
-        className="relative h-full max-h-full w-full max-w-full overflow-hidden bg-black xl:w-auto"
+        style={
+          {
+            aspectRatio: frameAspectCss(format),
+            "--frame-w": frame.width,
+            "--frame-h": frame.height,
+          } as React.CSSProperties
+        }
+        className="relative w-full overflow-hidden bg-black [container-type:size] xl:w-[min(100cqw,100cqh*var(--frame-w)/var(--frame-h))]"
       >
         {fx?.veil && <div className="absolute inset-0" style={{ background: fx.veil }} />}
 

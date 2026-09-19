@@ -712,8 +712,15 @@ export function EditorView({
           Two rows, and only the first of them flexes: the picture takes
           whatever the strip doesn't need, so a tall monitor gets a bigger
           frame rather than a taller waveform.
+
+          `grid-cols-1` for the same reason the room above has it, and it
+          matters more here: an implicit `auto` column is sized by its widest
+          item, and the strip's widest item is the whole zoomed ruler — two
+          and a half thousand pixels of it, inside a scroller that never got
+          the chance to scroll. That stretched this cell's only column to the
+          ruler's width and took the picture with it, out over the inspector.
         */}
-        <div className="min-w-0 space-y-4 xl:grid xl:min-h-0 xl:grid-rows-[minmax(0,1fr)_auto] xl:gap-2 xl:space-y-0">
+        <div className="min-w-0 space-y-4 xl:grid xl:min-h-0 xl:grid-cols-1 xl:grid-rows-[minmax(0,1fr)_auto] xl:gap-2 xl:space-y-0">
           <PreviewPlayer
             timeline={timeline}
             mediaById={mediaById}
