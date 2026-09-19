@@ -287,9 +287,23 @@ export function EditorView({
     const ids = timeline.clips.map((c) => c.mediaItemId);
     const [moved] = ids.splice(from, 1);
     ids.splice(to, 0, moved);
+
+    /**
+     * Move it now, ask afterwards. The strip otherwise sits at the old order
+     * for a whole round trip — long enough to drag a shot twice. `syncCut`
+     * broadcasts the document it writes, so the authoritative version lands
+     * on top of this; only the op must *not* also be emitted, or the same
+     * change would be applied twice and race that document.
+     */
+    setTimeline((prev) => applyTimelineOp(prev, { type: "clip.move", clipId, toIndex: to }));
+    setError(null);
+
     startTransition(async () => {
       const result = await reorderCutAction(slug, ids);
-      if (!result.ok) setError(result.error);
+      if (!result.ok) {
+        setError(result.error);
+        socket?.emit("timeline:request", { vlogId });
+      }
     });
   }
 
@@ -301,13 +315,21 @@ export function EditorView({
     // never on nothing, which would close the panel you're working in.
     const next = timeline.clips[index + 1] ?? timeline.clips[index - 1] ?? null;
     choose(next ? { kind: "clip", id: next.id } : NO_SELECTION);
+
+    // Gone from the strip immediately, for the same reason.
+    setTimeline((prev) => applyTimelineOp(prev, { type: "clip.remove", clipId }));
+    setError(null);
+
     startTransition(async () => {
       const result = await setCutOverrideAction(slug, {
         targetType: "media",
         targetId: clip.mediaItemId,
         override: "exclude",
       });
-      if (!result.ok) setError(result.error);
+      if (!result.ok) {
+        setError(result.error);
+        socket?.emit("timeline:request", { vlogId });
+      }
     });
   }
 

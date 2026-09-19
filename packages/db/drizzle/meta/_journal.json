@@ -64,6 +64,34 @@
       "when": 1789905600000,
       "tag": "0008_music_from_the_top",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789992000000,
+      "tag": "0009_vlog_format",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790078400000,
+      "tag": "0010_media_rotation",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790164800000,
+      "tag": "0011_pass_verdicts",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790251200000,
+      "tag": "0012_strip_assets",
+      "breakpoints": true
     }
   ]
 }
