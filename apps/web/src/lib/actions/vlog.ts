@@ -9,8 +9,10 @@ import {
   emptyTimeline,
   generateSlug,
   generateToken,
+  isWorkingState,
   joinVlogSchema,
   setStateSchema,
+  videoFormatSchema,
   type VlogState,
 } from "@vlogbuddy/shared";
 import {
@@ -162,6 +164,44 @@ export async function setVlogStateAction(slug: string, state: VlogState): Promis
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Something went wrong" };
+  }
+}
+
+/**
+ * The shape of the finished film.
+ *
+ * The creator's, like the other decisions that bind everyone's work at once:
+ * changing it re-proportions every layer in the film and decides what happens
+ * to half the crew's footage. It lives on the bench rather than in /admin
+ * because it belongs to this film and not to the machine, and rather than in
+ * the print dialog because it changes what the preview is showing, which is
+ * the only honest way to choose it.
+ */
+export async function setVlogFormatAction(slug: string, format: string): Promise<ActionResult> {
+  const parsed = videoFormatSchema.safeParse(format);
+  if (!parsed.success) return { ok: false, error: "That's not a shape we can print" };
+
+  try {
+    const session = await requireMemberBySlug(slug);
+    requireCreator(session);
+
+    // A film at the lab has its shape settled — the print in progress was
+    // framed for the old one, and changing it under the render would leave a
+    // finished film nobody chose.
+    if (!isWorkingState(session.vlog.state)) {
+      return { ok: false, error: "The film's being printed — its shape is set until that's done" };
+    }
+
+    await db
+      .update(vlogs)
+      .set({ format: parsed.data, updatedAt: new Date() })
+      .where(eq(vlogs.id, session.vlog.id));
+
+    emitToVlog(session.vlog.id, "vlog:format", { format: parsed.data });
+    revalidatePath(`/v/${slug}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Couldn't change the shape" };
   }
 }
 

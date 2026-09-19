@@ -12,6 +12,7 @@
  * worth a check.
  */
 import {
+  DEFAULT_FIT_POLICY,
   applyTimelineOp, detectScenes, emptyTimeline, reconcileClips, runDirector,
   timelineDuration, clipDuration, sceneLabel, TRANSITION_LABELS,
   beatGridInFilmTime, clipStartTimes, nearestBeat,
@@ -45,7 +46,8 @@ const cut: CutEntry[] = offsets.map((m, i) => ({
 const input = {
   cut,
   threshold: 0,
-  settings: { enabled: true, pace: "standard" as const, sceneText: true, beatSnap: false },
+  settings: { enabled: true, pace: "standard" as const, sceneText: true, beatSnap: false,
+             fitPolicy: DEFAULT_FIT_POLICY },
 };
 
 // --- scenes -----------------------------------------------------------------
@@ -438,7 +440,8 @@ const photoCut: CutEntry[] = Array.from({ length: 8 }, (_, i) => ({
 const photoInput = {
   cut: photoCut,
   threshold: 0,
-  settings: { enabled: true, pace: "relaxed" as const, sceneText: false, beatSnap: false },
+  settings: { enabled: true, pace: "relaxed" as const, sceneText: false, beatSnap: false,
+             fitPolicy: DEFAULT_FIT_POLICY },
 };
 const stills = runDirector(reconcileClips(emptyTimeline(), photoCut), photoInput);
 

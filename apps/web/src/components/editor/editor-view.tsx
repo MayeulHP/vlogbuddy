@@ -11,6 +11,7 @@ import {
   type AudioTrack,
   type TimelineDoc,
   type TimelineOp,
+  type VideoFormat,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { startRenderAction } from "@/lib/actions/timeline";
@@ -22,6 +23,7 @@ import { LayerInspector } from "./layer-inspector";
 import { AudioInspector, type SoundState } from "./audio-inspector";
 import { BedSettings, LayerPicker, SoundPicker } from "./stack-panels";
 import { DirectorPanel } from "./director-panel";
+import { FormatPanel } from "./format-panel";
 import { ADD_KINDS, TimelineTracks, audioTrackLabel, type AddKind } from "./timeline-tracks";
 import { PreviewPlayer } from "./preview-player";
 import { NO_SELECTION, type Selection } from "./selection";
@@ -43,6 +45,10 @@ interface EditorViewProps {
   connected: boolean;
   isCreator: boolean;
   memberId: string;
+  /** The shape the film prints at; the preview draws against the same one. */
+  format: VideoFormat;
+  /** The operator's render size, read as the frame's shorter edge. */
+  renderShortEdge: number;
   /** Jumps this viewer back to the Gather page — same document, other lane. */
   onBackToGather: () => void;
 }
@@ -73,6 +79,8 @@ export function EditorView({
   connected,
   isCreator,
   memberId,
+  format,
+  renderShortEdge,
   onBackToGather,
 }: EditorViewProps) {
   const [timeline, setTimeline] = useState<TimelineDoc>(initialTimeline);
@@ -241,6 +249,8 @@ export function EditorView({
         total={timeline.clips.length}
         playheadTime={playheadTime}
         clipStart={clipStarts[selected.id] ?? 0}
+        format={format}
+        fitPolicy={timeline.director.fitPolicy}
         onDispatch={dispatch}
         onReorder={(toIndex) => reorderClip(selected.id, toIndex)}
         onSplit={() => splitClip(selected.id)}
@@ -559,6 +569,15 @@ export function EditorView({
    */
   const filmSettings = (
     <>
+      <FormatPanel
+        slug={slug}
+        format={format}
+        shortEdge={renderShortEdge}
+        timeline={timeline}
+        isCreator={isCreator}
+        locked={rendering}
+        onDispatch={dispatch}
+      />
       <DirectorPanel slug={slug} timeline={timeline} locked={rendering} />
       <div className="border-t border-[color:var(--hair-dark)]">
         <BedSettings
@@ -701,6 +720,7 @@ export function EditorView({
             musicById={musicById}
             durations={durations}
             playheadTime={playheadTime}
+            format={format}
             onTimeChange={setPlayheadTime}
             selectedClipId={selection.kind === "clip" ? selection.id : null}
             onSelectClip={(id) => choose({ kind: "clip", id })}

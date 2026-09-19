@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { getRenderSettings } from "@vlogbuddy/db";
 import { getCurrentMember, getVlogBySlug } from "@/lib/session";
 import {
   getLatestRenderJob,
@@ -63,7 +64,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
     );
   }
 
-  const [media, music, membersList, timeline, latestRender, published, immich] =
+  const [media, music, membersList, timeline, latestRender, published, immich, renderSettings] =
     await Promise.all([
       getMediaItems(vlog.id, member.id),
       getMusicItems(vlog.id, member.id),
@@ -72,6 +73,9 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
       getLatestRenderJob(vlog.id),
       getPublishedRender(vlog.id),
       connectionForMember(member.id),
+      // The shape is the film's; the size it prints at is the operator's. The
+      // bench needs both to say "1080×1920" out loud rather than "9:16".
+      getRenderSettings(),
     ]);
 
   return (
@@ -83,6 +87,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
         shareSlug: vlog.shareSlug,
         state: vlog.state,
         scoreThreshold: vlog.scoreThreshold,
+        format: vlog.format,
       }}
       member={{
         id: member.id,
@@ -102,6 +107,7 @@ export default async function VlogPage({ params }: { params: Promise<{ slug: str
       latestRender={latestRender}
       publishedRender={published}
       immichConnection={immich ? publicConnection(immich) : null}
+      renderShortEdge={renderSettings.renderHeight}
       shareUrl={`${env().PUBLIC_BASE_URL}/v/${vlog.shareSlug}`}
     />
   );

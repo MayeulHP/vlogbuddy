@@ -20,7 +20,7 @@ import {
   timelines,
   vlogs,
 } from "@vlogbuddy/db";
-import { emptyTimeline, generateSlug, generateToken } from "@vlogbuddy/shared";
+import { DEFAULT_FIT_POLICY, emptyTimeline, generateSlug, generateToken } from "@vlogbuddy/shared";
 import { env } from "./env.js";
 import { buildStorageKey, uploadFile } from "./storage.js";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -172,6 +172,7 @@ async function main() {
         duration: 2,
         transitionIn: i === 0 ? ("cut" as const) : ("crossfade" as const),
         transitionDuration: 0.5,
+        fit: "auto" as const,
         motion: "none" as const,
         speed: 1,
         brightness: 0,
@@ -223,7 +224,8 @@ async function main() {
       // so nothing in it belongs to a stretch of trip.
       scenes: [],
       duckClipAudio: true,
-      director: { enabled: true, pace: "standard" as const, sceneText: false, beatSnap: false },
+      director: { enabled: true, pace: "standard" as const, sceneText: false, beatSnap: false,
+                  fitPolicy: DEFAULT_FIT_POLICY },
     };
 
     await db.update(timelines).set({ doc, revision: 1 }).where(eq(timelines.vlogId, vlog.id));

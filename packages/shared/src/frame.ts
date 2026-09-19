@@ -20,8 +20,8 @@ export const DEFAULT_VIDEO_FORMAT: VideoFormat = "landscape";
 export const videoFormatSchema = z.enum(VIDEO_FORMATS);
 
 export const FORMAT_LABELS: Record<VideoFormat, string> = {
-  landscape: "Widescreen",
-  portrait: "Upright",
+  landscape: "Wide",
+  portrait: "Tall",
   square: "Square",
 };
 
@@ -33,8 +33,8 @@ export const FORMAT_RATIOS: Record<VideoFormat, string> = {
 
 export const FORMAT_BLURBS: Record<VideoFormat, string> = {
   landscape: "For a telly or a laptop. The usual shape of a film.",
-  portrait: "For a phone, held the way it was probably filmed.",
-  square: "Splits the difference — fine anywhere, cropped nowhere in particular.",
+  portrait: "For a phone, held the way most of this was probably filmed.",
+  square: "Splits the difference — fine anywhere, and nothing is badly out of shape.",
 };
 
 /** H.264 needs both dimensions even, and rounding down never overshoots the box. */
@@ -84,7 +84,7 @@ export function frameAspectCss(format: VideoFormat): string {
   return `${width} / ${height}`;
 }
 
-/** "1080×1920 · upright" — the format as a consequence rather than a label. */
+/** "1080×1920 · tall" — the format as a consequence rather than a label. */
 export function formatSummary(format: VideoFormat, shortEdge: number): string {
   const { width, height } = frameFor(format, shortEdge);
   return `${width}×${height} · ${FORMAT_LABELS[format].toLowerCase()}`;
@@ -114,17 +114,17 @@ export type ClipFitChoice = (typeof CLIP_FIT_CHOICES)[number];
 export const DEFAULT_FIT_POLICY: ClipFit = "blur";
 
 export const FIT_LABELS: Record<ClipFitChoice, string> = {
-  auto: "Auto",
-  bars: "Bars",
-  fill: "Fill",
-  blur: "Blur",
+  auto: "Follow the film",
+  bars: "Black bars",
+  fill: "Crop to fill",
+  blur: "Blur the edges",
 };
 
 export const FIT_BLURBS: Record<ClipFitChoice, string> = {
-  auto: "Whatever the film does with shots of the wrong shape.",
-  bars: "Keeps the whole shot, black either side.",
-  fill: "Crops to fill the frame — the edges are lost.",
-  blur: "Whole shot, with a soft blown-up copy of it filling the edges.",
+  auto: "Whatever the rest of the film does with shots that aren't its shape.",
+  bars: "Keeps the whole shot, with black down the empty sides.",
+  fill: "Fills the frame by cropping in — you lose the edges of the shot.",
+  blur: "Keeps the whole shot, with a soft blown-up copy of it filling the sides.",
 };
 
 /**

@@ -26,6 +26,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { MediaItem } from "@vlogbuddy/db";
 import {
+  DEFAULT_FIT_POLICY,
   TRANSITIONS,
   audioTrackSchema,
   emptyTimeline,
@@ -110,6 +111,7 @@ function clip(over: Partial<Clip> & Pick<Clip, "id" | "mediaItemId">): Clip {
     trimStart: 0,
     trimEnd: null,
     duration: 3,
+    fit: "auto",
     transitionIn: "cut",
     transitionDuration: 0.5,
     motion: "none",
@@ -810,7 +812,7 @@ async function main() {
   const directed = runDirector(reconcileClips(emptyTimeline(), autoCut), {
     cut: autoCut,
     threshold: 0,
-    settings: { enabled: true, pace: "snappy", sceneText: true, beatSnap: false },
+    settings: { enabled: true, pace: "snappy", sceneText: true, beatSnap: false, fitPolicy: DEFAULT_FIT_POLICY },
   });
   await runCase("director-output", directed, [m.p1, m.v1, m.p2, m.v2], files, null);
 

@@ -16,6 +16,7 @@ import {
   type AutoField,
   type SceneAutoField,
 } from "./constants";
+import { CLIP_FITS, CLIP_FIT_CHOICES, DEFAULT_FIT_POLICY } from "./frame";
 
 /**
  * The timeline document: the single authoritative description of the final cut.
@@ -89,6 +90,18 @@ export const directorSettingsSchema = z.object({
    * somebody drops in music is a surprise nobody asked for.
    */
   beatSnap: z.boolean().default(false),
+  /**
+   * What happens to a shot that isn't the shape of the film. Not the
+   * auto-cut's decision — it never writes this and never reads it — but it is
+   * the film's one answer to a question every clip asks, and it rides on the
+   * document so there's no column for it and nothing to migrate.
+   *
+   * `blur` by default because the mismatch is the common case with four
+   * phones in the crew: it reads as a deliberate look rather than a broken
+   * frame, and unlike `fill` it never quietly throws away the sides of
+   * somebody's shot. Cropping should be something you chose.
+   */
+  fitPolicy: z.enum(CLIP_FITS).default(DEFAULT_FIT_POLICY),
 });
 export type DirectorSettings = z.infer<typeof directorSettingsSchema>;
 
@@ -135,6 +148,15 @@ export const clipSchema = z.object({
   trimEnd: z.number().min(0).nullable().default(null),
   /** Photos only: how long the still holds on screen. */
   duration: z.number().positive().default(DEFAULT_PHOTO_DURATION),
+  /**
+   * How this shot fills a frame it doesn't match. `auto` — the default, and
+   * what every document written before this parses as — defers to the film's
+   * `fitPolicy`, and only where there's actually a mismatch. See `resolveFit`:
+   * the answer is never stored, because a shot's dimensions arrive seconds
+   * after the upload does and baking one in at that moment would flip the
+   * frame under everyone when the probe lands.
+   */
+  fit: z.enum(CLIP_FIT_CHOICES).default("auto"),
   /** Transition *into* this clip from the previous one. */
   transitionIn: transitionSchema.default("cut"),
   transitionDuration: z.number().min(0).max(5).default(DEFAULT_TRANSITION_DURATION),
@@ -200,6 +222,13 @@ export const AUTO_FIELD_FOR: Record<keyof Omit<Clip, "id" | "auto">, AutoField |
   trimStart: "timing",
   trimEnd: "timing",
   duration: "timing",
+  // Nobody's. The auto-cut never writes a fit — `resolveFit` answers the
+  // question at the frame, off the film's policy — so there is no decision
+  // here for "start again" to take back, and filing it under an existing flag
+  // would mean that saying "crop this one" also froze the auto-cut's grip on
+  // something unrelated. A re-cut leaves an overridden shot framed as it was
+  // left, which is the same answer either way.
+  fit: null,
   transitionIn: "transition",
   transitionDuration: "transition",
   motion: "motion",
@@ -461,30 +490,78 @@ export function isGraded(clip: Clip): boolean {
  * shot briefer than its own dissolve.
  *
  * `available` is how much timeline precedes this clip; the first one has none
- * and so overlaps nothing.
+ * and so overlaps nothing. `room` is how much of the *previous* shot is still
+ * unspoken for — see `clipOverlaps` for why a shot dissolved at both ends
+ * needs that fourth limit, and why the renderer passes it separately.
  */
-export function transitionOverlap(clip: Clip, clipLength: number, available: number): number {
+export function transitionOverlap(
+  clip: Clip,
+  clipLength: number,
+  available: number,
+  room = Infinity,
+): number {
   if (!overlapsPrevious(clip.transitionIn)) return 0;
   return Math.max(
     0,
-    Math.min(clip.transitionDuration, clipLength * TRANSITION_MAX_SHARE, available),
+    Math.min(clip.transitionDuration, clipLength * TRANSITION_MAX_SHARE, available, room),
   );
+}
+
+/**
+ * How far each clip pulls back over the one before it, in running order.
+ *
+ * The walk everything that measures the base track shares, because the answer
+ * for one clip depends on the answer for the clip before it. A shot dissolved
+ * at *both* ends can be asked for more overlap than it is long, and then the
+ * two dissolves would have to happen at once — which the renderer, printing
+ * each dissolve as a piece of its own, structurally cannot do. It holds the
+ * second one back to whatever the previous shot has left, so the bench holds
+ * it back by the same rule: a dissolve can eat the rest of the shot in front
+ * of it and not a frame more.
+ *
+ * (The renderer additionally keeps one frame of that shot alive, because a
+ * piece with no frames in it is a file FFmpeg can't write. There is no frame
+ * rate here — the bench doesn't know the operator's — so the film can run one
+ * frame per pathological dissolve longer than this says. That is the whole of
+ * the remaining disagreement.)
+ */
+export function clipOverlaps(
+  timeline: TimelineDoc,
+  durations: Record<string, number | null | undefined> = {},
+): number[] {
+  const overlaps: number[] = [];
+  let available = 0;
+  let previousLength = 0;
+  timeline.clips.forEach((clip, index) => {
+    const length = clipDuration(clip, durations[clip.mediaItemId]);
+    const overlap =
+      index === 0
+        ? 0
+        : transitionOverlap(clip, length, available, Math.max(0, previousLength - overlaps[index - 1]));
+    overlaps.push(overlap);
+    available = available - overlap + length;
+    previousLength = length;
+  });
+  return overlaps;
 }
 
 /**
  * Total video length — the base track's, since layers and audio are clipped to
  * the picture. Crossfades overlap, so each one shortens the result by however
- * much of it `transitionOverlap` allows.
+ * much of it `clipOverlaps` allows.
  */
 export function timelineDuration(
   timeline: TimelineDoc,
   durations: Record<string, number | null | undefined> = {},
 ): number {
+  const overlaps = clipOverlaps(timeline, durations);
   let total = 0;
+  // Subtracted then added, in that order, exactly as this walked before the
+  // overlaps were lifted out: a film whose length shifts in the last bits of a
+  // float is a film that churns a revision.
   timeline.clips.forEach((clip, index) => {
-    const length = clipDuration(clip, durations[clip.mediaItemId]);
-    if (index > 0) total -= transitionOverlap(clip, length, total);
-    total += length;
+    total -= overlaps[index];
+    total += clipDuration(clip, durations[clip.mediaItemId]);
   });
   return Math.max(0, total);
 }
@@ -494,13 +571,13 @@ export function clipStartTimes(
   timeline: TimelineDoc,
   durations: Record<string, number | null | undefined> = {},
 ): Record<string, number> {
+  const overlaps = clipOverlaps(timeline, durations);
   const starts: Record<string, number> = {};
   let cursor = 0;
   timeline.clips.forEach((clip, index) => {
-    const length = clipDuration(clip, durations[clip.mediaItemId]);
-    if (index > 0) cursor -= transitionOverlap(clip, length, cursor);
+    cursor -= overlaps[index];
     starts[clip.id] = cursor;
-    cursor += length;
+    cursor += clipDuration(clip, durations[clip.mediaItemId]);
   });
   return starts;
 }
@@ -625,6 +702,7 @@ export function defaultClipFor(entry: CutEntry): Clip {
     trimStart: 0,
     trimEnd: isVideo ? entry.durationSeconds : null,
     duration: isVideo ? entry.durationSeconds ?? 5 : DEFAULT_PHOTO_DURATION,
+    fit: "auto",
     transitionIn: "cut",
     transitionDuration: DEFAULT_TRANSITION_DURATION,
     motion: "none",

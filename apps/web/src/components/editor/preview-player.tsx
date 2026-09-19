@@ -9,6 +9,7 @@ import {
   clipSpeed,
   clipStartTimes,
   formatDuration,
+  frameAspectCss,
   isGraded,
   layersInPaintOrder,
   movesFrame,
@@ -20,6 +21,7 @@ import {
   type LayerClip,
   type TimelineDoc,
   type TransitionEffect,
+  type VideoFormat,
 } from "@vlogbuddy/shared";
 import type { MediaItemView, MusicItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
@@ -196,6 +198,7 @@ export function PreviewPlayer({
   onSelectClip,
   playing,
   onPlayingChange: setPlaying,
+  format,
 }: {
   timeline: TimelineDoc;
   mediaById: Map<string, MediaItemView>;
@@ -212,6 +215,15 @@ export function PreviewPlayer({
    */
   playing: boolean;
   onPlayingChange: (playing: boolean) => void;
+  /**
+   * The shape of the finished film.
+   *
+   * Not decoration: a layer is stored as a rectangle in *fractions of the
+   * frame*, so a preview that isn't the render's shape puts an inset
+   * somewhere the render won't — and someone would lay a title out against
+   * a lie.
+   */
+  format: VideoFormat;
 }) {
 
   const rafRef = useRef<number | null>(null);
@@ -471,7 +483,10 @@ export function PreviewPlayer({
 
   if (timeline.clips.length === 0) {
     return (
-      <div className="flex aspect-video items-center justify-center border border-[color:var(--hair-dark)] bg-ink-950 bg-hatch">
+      <div
+        style={{ aspectRatio: frameAspectCss(format) }}
+        className="flex items-center justify-center border border-[color:var(--hair-dark)] bg-ink-950 bg-hatch"
+      >
         <p className="eyebrow-light">No picture yet</p>
       </div>
     );
@@ -533,7 +548,10 @@ export function PreviewPlayer({
         over the transport.
       */}
       <div className="flex min-h-0 flex-1 items-center justify-center">
-      <div className="relative aspect-video h-full max-h-full w-full max-w-full overflow-hidden bg-black xl:w-auto">
+      <div
+        style={{ aspectRatio: frameAspectCss(format) }}
+        className="relative h-full max-h-full w-full max-w-full overflow-hidden bg-black xl:w-auto"
+      >
         {fx?.veil && <div className="absolute inset-0" style={{ background: fx.veil }} />}
 
         {src ? (

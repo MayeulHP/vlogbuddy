@@ -9,6 +9,7 @@ import {
   isWorkingState,
   type ReactionTier,
   type TimelineDoc,
+  type VideoFormat,
   type VlogState,
   type WorkspaceTab,
 } from "@vlogbuddy/shared";
@@ -32,6 +33,8 @@ export interface VlogShellProps {
     shareSlug: string;
     state: VlogState;
     scoreThreshold: number;
+    /** The shape it prints at — the bench previews against it. */
+    format: VideoFormat;
   };
   member: { id: string; displayName: string; role: "creator" | "friend" };
   members: { id: string; displayName: string; role: "creator" | "friend" }[];
@@ -44,6 +47,8 @@ export interface VlogShellProps {
   publishedRender: (RenderJob & { url: string; downloadUrl: string }) | null;
   shareUrl: string;
   immichConnection: PublicImmichConnection | null;
+  /** The operator's render size, read as the frame's shorter edge. */
+  renderShortEdge: number;
 }
 
 export function VlogShell(props: VlogShellProps) {
@@ -71,6 +76,9 @@ export function VlogShell(props: VlogShellProps) {
   useSocketEvent(socket, "selection:reordered", refresh);
   useSocketEvent(socket, "music:moved", refresh);
   useSocketEvent(socket, "vlog:threshold", refresh);
+  // The shape lives on the vlog row, so the server components own it like
+  // everything else — a refresh is the whole of the handling.
+  useSocketEvent(socket, "vlog:format", refresh);
   // The cut engine rebuilds the timeline whenever a vote moves the line.
   useSocketEvent(socket, "timeline:sync", refresh);
 
@@ -209,6 +217,8 @@ export function VlogShell(props: VlogShellProps) {
             connected={connected}
             isCreator={isCreator}
             memberId={member.id}
+            format={vlog.format}
+            renderShortEdge={props.renderShortEdge}
             onBackToGather={() => setTab("gather")}
           />
         )}

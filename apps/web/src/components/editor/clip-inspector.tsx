@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  CLIP_FIT_CHOICES,
+  FIT_BLURBS,
+  FIT_LABELS,
   MOTIONS,
   MOTION_GLYPHS,
   MOTION_LABELS,
@@ -14,8 +17,12 @@ import {
   formatDuration,
   isGraded,
   overlapsPrevious,
+  previewFrame,
+  resolveFit,
   type Clip,
+  type ClipFit,
   type TimelineOp,
+  type VideoFormat,
 } from "@vlogbuddy/shared";
 import type { MediaItemView } from "@/lib/queries";
 import { cn } from "@/lib/cn";
@@ -55,6 +62,8 @@ export function ClipInspector({
   total,
   playheadTime,
   clipStart,
+  format,
+  fitPolicy,
   onDispatch,
   onReorder,
   onSplit,
@@ -68,6 +77,10 @@ export function ClipInspector({
   playheadTime: number;
   /** Where this shot's first frame lands, so the playhead can be read against it. */
   clipStart: number;
+  /** The shape of the film — half of the question this shot's fit answers. */
+  format: VideoFormat;
+  /** What the film does with a mismatch, which is what "follow the film" means. */
+  fitPolicy: ClipFit;
   onDispatch: (op: TimelineOp) => void;
   /**
    * Where this shot sits in the running order, and whether it's in at all,
@@ -90,6 +103,26 @@ export function ClipInspector({
   const canSplit = canSplitAt(clip, splitAt);
 
   const trimmedAway = sourceDuration === null ? 0 : sourceDuration - effective;
+
+  /**
+   * What this shot does with a frame it doesn't match — and first, whether it
+   * is even the wrong shape.
+   *
+   * The mismatch is asked through `resolveFit` with a policy that differs from
+   * its no-mismatch answer, rather than by comparing ratios here: the rule for
+   * what counts as "the same shape" (and which way round a rotated file
+   * measures) lives in one place, and a second copy of it would drift.
+   */
+  const frame = previewFrame(format);
+  const fitInput = {
+    clipWidth: media?.width,
+    clipHeight: media?.height,
+    clipRotation: media?.rotation,
+    frameWidth: frame.width,
+    frameHeight: frame.height,
+  };
+  const mismatched = resolveFit({ ...fitInput, fit: "auto", policy: "fill" }) === "fill";
+  const followed = FIT_LABELS[fitPolicy].toLowerCase();
 
   function patch(p: Partial<Omit<Clip, "id">>) {
     onDispatch({ type: "clip.update", clipId: clip.id, patch: p });
@@ -266,6 +299,42 @@ export function ClipInspector({
             {canSplit
               ? `Cuts this shot in two ${formatDuration(splitAt)} in. Both halves stay in the cut, and you can move or take out either one.`
               : "Park the playhead inside this shot, clear of both ends, to cut it in two."}
+          </p>
+        </div>
+
+        {/*
+          What fills the frame around this shot, when it isn't the shape of
+          the film. An override of the film's own answer rather than a setting
+          of its own — most shots should never need touching, and one that says
+          "follow the film" goes on following it if the shape changes later.
+        */}
+        <div>
+          <p className="eyebrow-light mb-1.5">In the frame</p>
+          <div className="grid grid-cols-3 gap-px border border-[color:var(--hair-dark)]">
+            {CLIP_FIT_CHOICES.map((mode) => (
+              <button
+                key={mode}
+                onClick={() => patch({ fit: mode })}
+                className={cn(
+                  "px-1 py-2 font-mono text-2xs uppercase tracking-label transition-colors",
+                  // "Follow the film" is the answer for almost every shot, so
+                  // it gets the full width and the three overrides share a row.
+                  mode === "auto" && "col-span-3",
+                  clip.fit === mode
+                    ? "bg-signal-600 text-paper-50"
+                    : "bg-ink-900 text-ink-300 hover:bg-ink-800 hover:text-paper-100",
+                )}
+              >
+                {FIT_LABELS[mode]}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 font-mono text-2xs leading-relaxed text-ink-500">
+            {!mismatched
+              ? "This shot is already the shape of the film, so there's nothing to fill. Your pick here only starts to show if the film's shape changes."
+              : clip.fit === "auto"
+                ? `The film says ${followed}. ${FIT_BLURBS[fitPolicy]}`
+                : FIT_BLURBS[clip.fit]}
           </p>
         </div>
 
