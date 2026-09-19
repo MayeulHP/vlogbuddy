@@ -81,6 +81,24 @@ export type CutOverride = (typeof CUT_OVERRIDES)[number];
 export const REACTION_SCORES = [1, 2, 3] as const;
 export type ReactionScore = (typeof REACTION_SCORES)[number];
 
+/**
+ * Seen it, and it's not for me.
+ *
+ * A pass is stored like any other verdict rather than deleted, because "what
+ * haven't you looked at yet" and "what did you decline" are different
+ * questions and a missing row only answers the first. While they shared one
+ * value the deck kept re-serving shots people had already turned down, and the
+ * only way to stop being asked was to award a mark you didn't mean — which is
+ * how a pile of default Keeps got into the film.
+ */
+export const PASS_SCORE = 0;
+
+/**
+ * What one member said about one item: a mark, or a pass. `null` isn't a
+ * verdict at all — it means they haven't looked.
+ */
+export type Verdict = ReactionScore | typeof PASS_SCORE;
+
 export interface ReactionTier {
   score: ReactionScore;
   emoji: string;
@@ -288,6 +306,16 @@ export const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4] as const;
 export const MIN_SPEED = 0.25;
 export const MAX_SPEED = 4;
 
+/**
+ * The shortest anything on the bench is allowed to be.
+ *
+ * Lives here because the bench enforces it in three places that must agree —
+ * a handle dragged to nothing, a trim typed to nothing and the inspector's
+ * grow buttons — and three copies of a number whose whole job is to match is a
+ * bug waiting for someone to tune one of them.
+ */
+export const MIN_CLIP_SPAN = 0.2;
+
 /** Photos have no intrinsic duration; this is how long they hold on screen. */
 export const DEFAULT_PHOTO_DURATION = 3;
 export const DEFAULT_TRANSITION_DURATION = 0.5;
@@ -348,6 +376,28 @@ export const ACCEPTED_IMAGE_TYPES = [
   "image/heif",
   "image/avif",
 ];
+
+/**
+ * Image types a browser will actually paint.
+ *
+ * HEIC is the odd one out and it matters more than its share of the list: it
+ * is what every recent iPhone shoots by default, and outside Safari nothing
+ * can decode it. A HEIC original handed straight to an <img> is a broken
+ * image, so anything in this gap needs a JPEG stand-in made for it server-side
+ * before a single person can judge the shot.
+ */
+export const BROWSER_SAFE_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+];
+
+/** Does this photo need a stand-in before a browser can show it? */
+export function needsDisplayCopy(mime: string): boolean {
+  return mime.startsWith("image/") && !BROWSER_SAFE_IMAGE_TYPES.includes(mime);
+}
 
 export const ACCEPTED_VIDEO_TYPES = [
   "video/mp4",

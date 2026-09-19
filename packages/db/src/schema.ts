@@ -15,7 +15,8 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
-import type { CutOverride, ReactionTier } from "@vlogbuddy/shared";
+import { VIDEO_FORMATS } from "@vlogbuddy/shared";
+import type { CutOverride, MediaRotation, ReactionTier } from "@vlogbuddy/shared";
 import type { TimelineDoc } from "@vlogbuddy/shared";
 
 export const vlogStateEnum = pgEnum("vlog_state", ["open", "export", "published"]);
@@ -43,6 +44,7 @@ export const transferStatusEnum = pgEnum("transfer_status", [
   "failed",
 ]);
 export const targetTypeEnum = pgEnum("target_type", ["media", "music"]);
+export const videoFormatEnum = pgEnum("video_format", VIDEO_FORMATS);
 
 // --- vlogs ------------------------------------------------------------------
 
@@ -63,6 +65,13 @@ export const vlogs = pgTable(
     scoreThreshold: real("score_threshold").notNull().default(0),
     /** Customisable three-tier emoji scale. */
     reactionTiers: jsonb("reaction_tiers").$type<ReactionTier[]>(),
+    /**
+     * The shape of the finished film. Per vlog, not per box: the same server
+     * prints a widescreen holiday film and an upright gig reel. Resolution is
+     * still the operator's, on /admin. Everything written before this column
+     * existed is widescreen, which is what it was rendered as.
+     */
+    format: videoFormatEnum("format").notNull().default("landscape"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -115,6 +124,19 @@ export const mediaItems = pgTable(
 
     width: integer("width"),
     height: integer("height"),
+
+    /**
+     * Degrees clockwise to turn this file before it is shown or rendered.
+     *
+     * FFmpeg already honours the rotation flag in a well-formed file, and the
+     * width/height above are the display dimensions that come out of that. This
+     * is the override for the files that lie: forwarded video with the flag
+     * stripped, cameras that never wrote one. It sits on the file rather than
+     * on a clip because being sideways is a fact about the file, and one fix
+     * has to straighten it everywhere it appears.
+     */
+    rotation: integer("rotation").notNull().default(0).$type<MediaRotation>(),
+
     durationSeconds: doublePrecision("duration_seconds"),
     /** From EXIF/container metadata — drives chronological ordering. */
     capturedAt: timestamp("captured_at", { withTimezone: true }),
@@ -165,6 +187,26 @@ export const mediaItems = pgTable(
     beatTimes: jsonb("beat_times").$type<number[]>(),
     beatConfidence: doublePrecision("beat_confidence"),
 
+    /**
+     * The strip's legibility, precomputed.
+     *
+     * Video gets a contact sheet: `filmstripFrames` frames, one every
+     * `filmstripIntervalSeconds`, tiled left to right into a single JPEG. The
+     * editor paints it as a repeating background whose width is
+     * frames x interval x pixels-per-second, so the shot on the bench is the
+     * footage at that moment rather than one thumbnail stretched over it — and
+     * it stays true while the shot is trimmed, because the offset is just the
+     * in-point in pixels.
+     *
+     * Audio uploads get `peaks` instead: a 0..1 envelope, which is what turns a
+     * flat block in the audio lane into a waveform you can line a cue up
+     * against.
+     */
+    filmstripKey: text("filmstrip_key"),
+    filmstripFrames: integer("filmstrip_frames"),
+    filmstripIntervalSeconds: doublePrecision("filmstrip_interval_seconds"),
+    peaks: jsonb("peaks").$type<number[]>(),
+
     /** Where this came from, when it came from somebody's Immich. */
     immichAssetId: text("immich_asset_id"),
     immichAlbumName: text("immich_album_name"),
@@ -200,7 +242,10 @@ export const appSettings = pgTable("app_settings", {
   /** Always `true` — a one-row table that can't accidentally grow. */
   id: boolean("id").primaryKey().default(true),
 
-  /** Output height in pixels; width follows from 16:9. */
+  /**
+   * The film's shorter edge in pixels — the long one follows from the vlog's
+   * own format. In widescreen that is the height, exactly as it always was.
+   */
   renderHeight: integer("render_height").notNull().default(1080),
   renderFps: integer("render_fps").notNull().default(30),
   /** x264 quality, lower is better. 18 is visually lossless, 28 is rough. */
@@ -209,6 +254,23 @@ export const appSettings = pgTable("app_settings", {
   renderPreset: text("render_preset").notNull().default("veryfast"),
 
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * One-shot data corrections that have already been applied.
+ *
+ * A migration that only adds columns can be replayed harmlessly; one that
+ * rewrites everybody's numbers cannot, and "the migrator won't run it twice"
+ * stops being true the moment a dump is restored or somebody runs the file by
+ * hand. Such a migration claims its id here in the same statement that does the
+ * damage, so a second run finds the row and does nothing.
+ *
+ * Nothing reads this table at runtime. It is a record for the next person.
+ */
+export const dataFixes = pgTable("data_fixes", {
+  /** The migration tag, e.g. `0011_pass_verdicts`. */
+  id: text("id").primaryKey(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // --- immich -----------------------------------------------------------------
@@ -332,6 +394,13 @@ export const musicItems = pgTable(
     beatTimes: jsonb("beat_times").$type<number[]>(),
     /** 0..1. Low means the envelope had no periodicity worth trusting. */
     beatConfidence: doublePrecision("beat_confidence"),
+    /**
+     * The track's envelope, same shape and scale as `media_items.peaks` —
+     * measured off the extracted audio while the worker had it on disk. Null
+     * until (or unless) that extraction happens, which is why the audio lane
+     * still has to draw something without it.
+     */
+    peaks: jsonb("peaks").$type<number[]>(),
     status: processingStatusEnum("status").notNull().default("pending"),
     error: text("error"),
 
@@ -529,3 +598,4 @@ export type ImmichConnection = typeof immichConnections.$inferSelect;
 export type NewImmichConnection = typeof immichConnections.$inferInsert;
 export type ImmichTransfer = typeof immichTransfers.$inferSelect;
 export type AppSettings = typeof appSettings.$inferSelect;
+export type DataFix = typeof dataFixes.$inferSelect;

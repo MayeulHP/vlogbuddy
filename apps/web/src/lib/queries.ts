@@ -28,12 +28,15 @@ import {
 import { presignDownload } from "./storage";
 
 export interface ReactionTotals {
+  /** How many of the crew have looked at all — passes included. */
   count: number;
   sum: number;
   average: number;
-  /** Vote tally per tier, e.g. { 1: 2, 2: 5, 3: 1 }. */
+  /** Verdict tally, e.g. { 0: 3, 1: 2, 2: 5, 3: 1 } — 0 is a pass. */
   breakdown: Record<number, number>;
-  /** The current viewer's own score, if they've voted. */
+  /** How many of them actually marked it. What the rank's confidence rides on. */
+  supporters: number;
+  /** The current viewer's own verdict, if they've given one. `0` is a pass. */
   mine: number | null;
   /** Blended ranking score that drives dump-view ordering. */
   rank: number;
@@ -48,6 +51,13 @@ export interface ReactionTotals {
 export interface MediaItemView extends Omit<MediaItem, "latitude" | "longitude"> {
   uploaderName: string | null;
   thumbnailUrl: string | null;
+  /**
+   * The contact sheet the strip paints across a video block, with the geometry
+   * needed to map it onto the clock: `filmstripFrames` frames, one every
+   * `filmstripIntervalSeconds`. Null for anything processed before filmstrips
+   * existed — the strip falls back to the single thumbnail.
+   */
+  filmstripUrl: string | null;
   proxyUrl: string | null;
   originalUrl: string | null;
   reactions: ReactionTotals;
@@ -64,7 +74,7 @@ export interface MusicItemView extends MusicItem {
 }
 
 function emptyTotals(): ReactionTotals {
-  return { count: 0, sum: 0, average: 0, breakdown: {}, mine: null, rank: 0 };
+  return { count: 0, sum: 0, average: 0, breakdown: {}, supporters: 0, mine: null, rank: 0 };
 }
 
 /** Aggregates every reaction in a vlog in one query. */
@@ -89,12 +99,13 @@ async function loadReactionTotals(vlogId: string, viewerMemberId: string | null)
     }
     totals.count += 1;
     totals.sum += row.score;
+    if (row.score >= 1) totals.supporters += 1;
     totals.breakdown[row.score] = (totals.breakdown[row.score] ?? 0) + 1;
     if (viewerMemberId && row.memberId === viewerMemberId) totals.mine = row.score;
   }
   for (const totals of map.values()) {
     totals.average = totals.count ? totals.sum / totals.count : 0;
-    totals.rank = rankScore(totals.sum, totals.count);
+    totals.rank = rankScore(totals.sum, totals.count, totals.supporters);
   }
   return map;
 }
@@ -106,10 +117,23 @@ async function loadSelections(vlogId: string) {
   return map;
 }
 
+/**
+ * Marks that were the default when a vlog was made. A vlog stores its tiers at
+ * creation, so a redesign of the defaults would otherwise only ever reach new
+ * vlogs; a stored set that matches any past default is read as "whatever the
+ * defaults are now", and only a deliberately customised set is kept.
+ */
+const LEGACY_DEFAULT_MARKS: readonly (readonly string[])[] = [
+  ["\u25CF", "\u25CF\u25CF", "\u25CF\u25CF\u25CF"],
+  ["\u{1F642}", "\u{1F525}", "\u{1F929}"],
+];
+
 export function reactionTiersFor(vlog: Vlog): ReactionTier[] {
   const tiers = vlog.reactionTiers;
-  if (Array.isArray(tiers) && tiers.length === 3) return tiers;
-  return DEFAULT_REACTIONS;
+  if (!Array.isArray(tiers) || tiers.length !== 3) return DEFAULT_REACTIONS;
+  const marks = tiers.map((t) => t.emoji);
+  const legacy = LEGACY_DEFAULT_MARKS.some((set) => set.every((m, i) => m === marks[i]));
+  return legacy ? DEFAULT_REACTIONS : tiers;
 }
 
 export async function getMediaItems(
@@ -136,8 +160,9 @@ export async function getMediaItems(
       // A swept item keeps its row and its votes, but the bytes are gone —
       // presigning them would hand out links to 404s.
       const swept = item.prunedAt !== null;
-      const [thumbnailUrl, proxyUrl, originalUrl] = await Promise.all([
+      const [thumbnailUrl, filmstripUrl, proxyUrl, originalUrl] = await Promise.all([
         item.thumbnailKey && !swept ? presignDownload(item.thumbnailKey) : Promise.resolve(null),
+        item.filmstripKey && !swept ? presignDownload(item.filmstripKey) : Promise.resolve(null),
         item.proxyKey && !swept ? presignDownload(item.proxyKey) : Promise.resolve(null),
         item.status === "ready" && !swept
           ? presignDownload(item.storageKey)
@@ -148,6 +173,7 @@ export async function getMediaItems(
         ...shareable,
         uploaderName,
         thumbnailUrl,
+        filmstripUrl,
         proxyUrl,
         originalUrl,
         reactions: totals.get(key) ?? emptyTotals(),

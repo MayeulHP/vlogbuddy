@@ -6,4 +6,5 @@ export * from "./events";
 export * from "./music";
 export * from "./immich";
 export * from "./settings";
+export * from "./frame";
 export * from "./util";

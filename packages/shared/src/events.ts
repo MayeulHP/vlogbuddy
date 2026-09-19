@@ -1,5 +1,6 @@
 import type { TimelineDoc, TimelineOp } from "./timeline";
-import type { ProcessingStatus, RenderStatus, VlogState } from "./constants";
+import type { ProcessingStatus, RenderStatus, Verdict, VlogState } from "./constants";
+import type { VideoFormat } from "./frame";
 
 /**
  * Socket.IO contract. One room per vlog (`vlog:<id>`); the DB stays the source
@@ -28,8 +29,10 @@ export interface ReactionPayload {
   targetType: "media" | "music";
   targetId: string;
   memberId: string;
-  score: 1 | 2 | 3 | null;
-  totals: { count: number; sum: number; average: number };
+  /** `0` is a pass; `null` means they took their verdict back. */
+  score: Verdict | null;
+  /** `count` is everyone who looked, `supporters` only those who marked it. */
+  totals: { count: number; sum: number; supporters: number; average: number };
 }
 
 export interface ImmichTransferPayload {
@@ -79,6 +82,7 @@ export interface ServerToClientEvents {
 
   "vlog:state": (payload: { state: VlogState }) => void;
   "vlog:threshold": (payload: { threshold: number }) => void;
+  "vlog:format": (payload: { format: VideoFormat }) => void;
 
   "timeline:sync": (payload: { timeline: TimelineDoc; revision: number }) => void;
   "timeline:op": (payload: { op: TimelineOp; revision: number; byMemberId: string }) => void;

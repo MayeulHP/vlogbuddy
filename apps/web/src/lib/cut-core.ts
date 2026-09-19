@@ -25,7 +25,7 @@ import {
   type CutEntry,
   type TimelineDoc,
 } from "@vlogbuddy/shared";
-import { isInCut } from "./is-in-cut";
+import { isInCut, type Standing } from "./is-in-cut";
 
 /**
  * The cut engine.
@@ -226,6 +226,10 @@ export async function syncCut(
           targetId: reactions.targetId,
           count: sql<number>`count(*)::int`,
           sum: sql<number>`coalesce(sum(${reactions.score}), 0)::int`,
+          // Everyone who marked it rather than everyone who looked: a pass is
+          // a verdict, so it lands in `count` and pulls the average down, but
+          // it must never read as evidence *for* the shot.
+          supporters: sql<number>`count(*) filter (where ${reactions.score} >= 1)::int`,
         })
         .from(reactions)
         .where(eq(reactions.vlogId, vlogId))
@@ -237,10 +241,19 @@ export async function syncCut(
 
   const threshold = vlogRow[0]?.scoreThreshold ?? 0;
 
-  const rankOf = new Map<string, number>();
+  const standingOf = new Map<string, Standing>();
   for (const row of reactionRows) {
-    rankOf.set(`${row.targetType}:${row.targetId}`, rankScore(row.sum, row.count));
+    standingOf.set(`${row.targetType}:${row.targetId}`, {
+      rank: rankScore(row.sum, row.count, row.supporters),
+      seen: row.count,
+      supporters: row.supporters,
+    });
   }
+
+  /** Nobody has looked at it yet — which is not the same as everyone passing. */
+  const NO_STANDING: Standing = { rank: 0, seen: 0, supporters: 0 };
+  const standing = (key: string) => standingOf.get(key) ?? NO_STANDING;
+  const rankOf = (key: string) => standing(key).rank;
 
   // --- footage ---------------------------------------------------------------
 
@@ -253,7 +266,7 @@ export async function syncCut(
   [...footage].sort(chronoCompare).forEach((m, i) => chronoRank.set(m.id, i));
 
   const included = footage.filter((m) =>
-    isInCut(m.cutOverride, rankOf.get(`media:${m.id}`) ?? 0, threshold),
+    isInCut(m.cutOverride, standing(`media:${m.id}`), threshold),
   );
 
   const previousOrder = selectionRows
@@ -267,7 +280,7 @@ export async function syncCut(
 
   const trackState = musicRows.map((t) => ({
     id: t.id,
-    rank: rankOf.get(`music:${t.id}`) ?? 0,
+    rank: rankOf(`music:${t.id}`),
     included: t.cutOverride !== "exclude",
     timelinePosition: t.timelinePosition,
     seconds: t.audioDurationSeconds,
@@ -326,7 +339,7 @@ export async function syncCut(
         capturedAt: item.capturedAt?.getTime() ?? null,
         latitude: item.latitude,
         longitude: item.longitude,
-        rank: rankOf.get(`media:${item.id}`) ?? 0,
+        rank: rankOf(`media:${item.id}`),
       },
     ];
   });

@@ -7,7 +7,7 @@ import {
   formatDuration,
   type ReactionTier,
 } from "@vlogbuddy/shared";
-import { isInCut } from "@/lib/is-in-cut";
+import { isInCut, type Standing } from "@/lib/is-in-cut";
 import { useIsCompact, useIsTouch } from "@/hooks/use-media-query";
 import type { MediaItemView } from "@/lib/queries";
 import { setCutLineAction } from "@/lib/actions/cut";
@@ -24,6 +24,18 @@ const METRICS = {
   wide: { slot: 116, cardW: 100, plotH: 430, minCardH: 72, maxCardH: 132, gutter: 56 },
   compact: { slot: 88, cardW: 78, plotH: 290, minCardH: 58, maxCardH: 100, gutter: 40 },
 } as const;
+
+/**
+ * The same three numbers the cut engine weighs, read off the view model — so
+ * the pile and the film can't disagree about who's in.
+ */
+function standingOf(item: MediaItemView): Standing {
+  return {
+    rank: item.reactions.rank,
+    seen: item.reactions.count,
+    supporters: item.reactions.supporters,
+  };
+}
 
 function chronoSort(a: MediaItemView, b: MediaItemView) {
   const at = a.capturedAt ? new Date(a.capturedAt).getTime() : Number.MAX_SAFE_INTEGER;
@@ -88,7 +100,7 @@ export function DumpVoteTimeline({
   }, [savedThreshold, dragging]);
 
   const selected = useMemo(
-    () => items.filter((item) => isInCut(item.cutOverride, item.reactions.rank, threshold)),
+    () => items.filter((item) => isInCut(item.cutOverride, standingOf(item), threshold)),
     [items, threshold],
   );
 
@@ -306,7 +318,7 @@ export function DumpVoteTimeline({
               const pct = items.length === 1 ? 0 : index / (items.length - 1);
               const yRatio = item.reactions.rank / maxRank;
               const cardH = m.minCardH + yRatio * (m.maxCardH - m.minCardH);
-              const above = isInCut(item.cutOverride, item.reactions.rank, threshold);
+              const above = isInCut(item.cutOverride, standingOf(item), threshold);
               const maxBottom = m.plotH - cardH;
               const bottom = yRatio * maxBottom;
 
