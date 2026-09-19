@@ -221,8 +221,19 @@ export async function reorderCutAction(slug: string, order: string[]) {
     const parsed = reorderSelectionSchema.safeParse({ order });
     if (!parsed.success) return { ok: false as const, error: "Invalid order" };
 
+    /**
+     * One row per shot, however many clips point at it.
+     *
+     * `selections` tracks media, not clips, so an order carrying the same id
+     * twice would write two different indices to one row and leave the
+     * positions between them unused. Nothing can send a duplicate today —
+     * the cut holds one clip per media item — but a shot split in two would,
+     * and the failure is a running order that quietly rearranges itself.
+     */
+    const unique = Array.from(new Set(parsed.data.order));
+
     await db.transaction(async (tx) => {
-      for (let i = 0; i < parsed.data.order.length; i++) {
+      for (let i = 0; i < unique.length; i++) {
         await tx
           .update(selections)
           .set({ orderIndex: i })
@@ -230,7 +241,7 @@ export async function reorderCutAction(slug: string, order: string[]) {
             and(
               eq(selections.vlogId, session.vlog.id),
               eq(selections.targetType, "media"),
-              eq(selections.targetId, parsed.data.order[i]),
+              eq(selections.targetId, unique[i]),
             ),
           );
       }
