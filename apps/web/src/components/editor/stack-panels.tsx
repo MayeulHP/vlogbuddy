@@ -53,16 +53,14 @@ export function LayerPanel({
   );
 
   return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
-      <div className="flex items-start justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-3">
-        <div>
-          <p className="eyebrow-light">Over the top</p>
-          <h3 className="headline mt-0.5 text-xl text-paper-100">Layers</h3>
-          <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-500">
-            Pinned to the clock, not to a shot
-          </p>
-        </div>
-        <button onClick={() => setPicking((p) => !p)} className="btn-quiet-dark shrink-0 px-0">
+    <section>
+      {/* The tab above is the heading; what's left is the one control. */}
+      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2">
+        <p className="font-mono text-2xs uppercase tracking-label text-ink-500">Pinned to the clock, not to a shot</p>
+        <button
+          onClick={() => setPicking((p) => !p)}
+          className="btn-quiet-dark focus-ring-dark shrink-0 px-0"
+        >
           {picking ? "Close" : "+ Add"}
         </button>
       </div>
@@ -198,16 +196,14 @@ export function SoundPanel({
   }
 
   return (
-    <section className="border border-[color:var(--hair-dark)] bg-ink-850">
-      <div className="flex items-start justify-between gap-2 border-b border-[color:var(--hair-dark)] px-4 py-3">
-        <div>
-          <p className="eyebrow-light">Score</p>
-          <h3 className="headline mt-0.5 text-xl text-paper-100">The mix</h3>
-          <p className="mt-1 font-mono text-2xs uppercase tracking-label text-ink-500">
-            A bed, plus anything you drop on top
-          </p>
-        </div>
-        <button onClick={() => setPicking((p) => !p)} className="btn-quiet-dark shrink-0 px-0">
+    <section>
+      {/* The tab above is the heading; what's left is the one control. */}
+      <div className="flex items-center justify-between gap-2 border-b border-[color:var(--hair-dark)] px-3 py-2">
+        <p className="font-mono text-2xs uppercase tracking-label text-ink-500">A bed, plus anything you drop on top</p>
+        <button
+          onClick={() => setPicking((p) => !p)}
+          className="btn-quiet-dark focus-ring-dark shrink-0 px-0"
+        >
           {picking ? "Close" : "+ Add"}
         </button>
       </div>

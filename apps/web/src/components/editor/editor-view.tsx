@@ -22,6 +22,7 @@ import { DirectorPanel } from "./director-panel";
 import { TimelineTracks, audioTrackLabel } from "./timeline-tracks";
 import { PreviewPlayer } from "./preview-player";
 import { NO_SELECTION, type Selection } from "./selection";
+import { PanelEmpty, PanelTabs, type PanelTab } from "./panel-tabs";
 import { cn } from "@/lib/cn";
 
 interface EditorViewProps {
@@ -80,6 +81,7 @@ export function EditorView({
    */
   const [sheetOpen, setSheetOpen] = useState(false);
   const [playheadTime, setPlayheadTime] = useState(0);
+  const [panelTab, setPanelTab] = useState<PanelTab>("shot");
   const [error, setError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
   const [, startTransition] = useTransition();
@@ -179,6 +181,12 @@ export function EditorView({
   const choose = useCallback((next: Selection) => {
     setSelection(next);
     setSheetOpen(next.kind !== "none");
+    // The panels follow the work: picking a shot opens Shot, a layer opens
+    // Layers. A tab somebody switched to by hand stands until they pick
+    // something else — the strip is what moves the panel, not the other way.
+    if (next.kind === "clip") setPanelTab("shot");
+    else if (next.kind === "layer") setPanelTab("layers");
+    else if (next.kind === "audio") setPanelTab("sound");
   }, []);
 
   function chooseBedMusic(musicItemId: string | null) {
@@ -205,7 +213,7 @@ export function EditorView({
    */
   const asSheet = useMediaQuery("(max-width: 767px)");
 
-  const inspector =
+  const shotPanel =
     selection.kind === "clip" && selected && "titles" in selected ? (
       <ClipInspector
         clip={selected}
@@ -214,14 +222,22 @@ export function EditorView({
         total={timeline.clips.length}
         onDispatch={dispatch}
       />
-    ) : selection.kind === "layer" && selected && "opacity" in selected ? (
+    ) : (
+      <PanelEmpty>Pick a shot on the strip to trim it, retime it, or write over it.</PanelEmpty>
+    );
+
+  const layerDetail =
+    selection.kind === "layer" && selected && "opacity" in selected ? (
       <LayerInspector
         layer={selected}
         media={mediaById.get(selected.mediaItemId) ?? null}
         totalDuration={totalDuration}
         onDispatch={dispatch}
       />
-    ) : selection.kind === "audio" && selected && "role" in selected ? (
+    ) : null;
+
+  const audioDetail =
+    selection.kind === "audio" && selected && "role" in selected ? (
       <AudioInspector
         track={selected}
         label={audioTrackLabel(selected, mediaById, musicById)}
@@ -234,15 +250,19 @@ export function EditorView({
           setSelection(NO_SELECTION);
         }}
       />
-    ) : (
-      <div className="border border-[color:var(--hair-dark)] bg-ink-850 p-5 text-center">
-        <p className="eyebrow-light">Nothing selected</p>
-        <p className="mt-2 text-[13px] leading-relaxed text-ink-300">
-          Pick a shot on the strip to trim it, a layer to move it around the frame, or a track
-          to ride its level.
-        </p>
-      </div>
-    );
+    ) : null;
+
+  /** The phone's sheet shows the thing you just tapped, not the whole rack. */
+  const inspector =
+    selection.kind === "clip"
+      ? shotPanel
+      : (selection.kind === "layer" && layerDetail) ||
+        (selection.kind === "audio" && audioDetail) || (
+          <PanelEmpty>
+            Pick a shot on the strip to trim it, a layer to move it around the frame, or a
+            track to ride its level.
+          </PanelEmpty>
+        );
 
   const sheetTitle =
     selection.kind === "clip"
@@ -341,34 +361,52 @@ export function EditorView({
           />
         </div>
 
-        <aside className="space-y-4 xl:min-h-0 xl:overflow-y-auto xl:pb-1 xl:pr-1">
-          {/* On a phone this same inspector arrives as a sheet instead. */}
-          {!asSheet && inspector}
-
-          <DirectorPanel slug={slug} timeline={timeline} locked={rendering} />
-
-          <LayerPanel
-            timeline={timeline}
-            media={media}
-            mediaById={mediaById}
-            playheadTime={playheadTime}
-            selection={selection}
-            onSelect={choose}
-            onDispatch={dispatch}
-          />
-
-          <SoundPanel
-            timeline={timeline}
-            music={music}
-            media={media}
-            mediaById={mediaById}
-            musicById={musicById}
-            totalDuration={totalDuration}
-            playheadTime={playheadTime}
-            selection={selection}
-            onSelect={choose}
-            onDispatch={dispatch}
-            onChooseBedMusic={chooseBedMusic}
+        <aside className="min-h-0 xl:overflow-hidden">
+          <PanelTabs
+            active={panelTab}
+            onChange={setPanelTab}
+            cutHint={timeline.director.enabled ? "auto" : "by hand"}
+            className="xl:h-full"
+            panels={{
+              shot: shotPanel,
+              layers: (
+                <>
+                  <LayerPanel
+                    timeline={timeline}
+                    media={media}
+                    mediaById={mediaById}
+                    playheadTime={playheadTime}
+                    selection={selection}
+                    onSelect={choose}
+                    onDispatch={dispatch}
+                  />
+                  {layerDetail && (
+                    <div className="border-t border-[color:var(--hair-dark)]">{layerDetail}</div>
+                  )}
+                </>
+              ),
+              sound: (
+                <>
+                  <SoundPanel
+                    timeline={timeline}
+                    music={music}
+                    media={media}
+                    mediaById={mediaById}
+                    musicById={musicById}
+                    totalDuration={totalDuration}
+                    playheadTime={playheadTime}
+                    selection={selection}
+                    onSelect={choose}
+                    onDispatch={dispatch}
+                    onChooseBedMusic={chooseBedMusic}
+                  />
+                  {audioDetail && (
+                    <div className="border-t border-[color:var(--hair-dark)]">{audioDetail}</div>
+                  )}
+                </>
+              ),
+              cut: <DirectorPanel slug={slug} timeline={timeline} locked={rendering} />,
+            }}
           />
         </aside>
       </div>

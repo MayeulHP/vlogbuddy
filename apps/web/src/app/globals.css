@@ -238,6 +238,15 @@ body {
     @apply btn border-signal-700/40 bg-signal-100 text-signal-800 hover:border-signal-700 hover:bg-signal-200;
   }
   /* Dark-room variants, for the cut and the screening room. */
+  /*
+    Selected and focused have to read as two different things: selection is
+    the signal red the bench uses everywhere, focus is paper. A block that is
+    both wears a paper outline outside a red edge.
+  */
+  .focus-ring-dark:focus-visible {
+    outline: 2px solid theme("colors.paper.100");
+    outline-offset: 2px;
+  }
   .btn-outline-dark {
     @apply btn border-[color:var(--hair-dark)] bg-transparent text-paper-200
            hover:border-paper-200 hover:bg-paper-100 hover:text-ink-900 active:translate-y-px;
