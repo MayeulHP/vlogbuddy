@@ -182,6 +182,9 @@ function transitionStyles(
   }
 }
 
+/** How often playback tells the rest of the bench where it is. */
+const PUBLISH_INTERVAL = 1 / 30;
+
 export function PreviewPlayer({
   timeline,
   mediaById,
@@ -212,6 +215,31 @@ export function PreviewPlayer({
 }) {
 
   const rafRef = useRef<number | null>(null);
+
+  /**
+   * The playhead as playback sees it, at full frame rate. `playheadTime` is
+   * the same number published to the rest of the bench a few times a second;
+   * this is the one the media is kept in step with.
+   */
+  const clockRef = useRef(playheadTime);
+  /** The last value we sent up, so a seek from outside can be told apart. */
+  const publishedRef = useRef(playheadTime);
+  const onTimeChangeRef = useRef(onTimeChange);
+  onTimeChangeRef.current = onTimeChange;
+
+  const publish = useCallback((time: number) => {
+    publishedRef.current = time;
+    onTimeChangeRef.current(time);
+  }, []);
+
+  // A seek — the scrubber, a key, clicking a shot — moves the clock. Our own
+  // publishes come back through here too, and must not rewind it.
+  useEffect(() => {
+    if (playheadTime !== publishedRef.current) {
+      clockRef.current = playheadTime;
+      publishedRef.current = playheadTime;
+    }
+  }, [playheadTime]);
   /**
    * Every <audio> in the stack, so the play button can start them from inside
    * the click. Browsers only hand an element permission to make sound during a
@@ -242,6 +270,29 @@ export function PreviewPlayer({
         started.catch((err: unknown) => {
           // Pausing a track that shouldn't be audible yet rejects too — only an
           // outright refusal means the browser is holding the sound back.
+          if (err instanceof DOMException && err.name === "NotAllowedError") {
+            setAudioBlocked(true);
+          }
+        });
+      }
+    }
+  }, [playing]);
+
+  /**
+   * Space starts playback from anywhere on the bench, so it never passes
+   * through the button above — and the sound has to be started by something.
+   *
+   * The button still does it inside the click, because the very first play of
+   * a session needs the gesture itself; once the page has been interacted
+   * with, the activation is sticky and this is late enough. Starting a track
+   * twice is harmless; never starting it is silence nobody can explain.
+   */
+  useEffect(() => {
+    if (!playing) return;
+    for (const el of audioEls.current.values()) {
+      const started = el.play();
+      if (started) {
+        started.catch((err: unknown) => {
           if (err instanceof DOMException && err.name === "NotAllowedError") {
             setAudioBlocked(true);
           }
@@ -350,28 +401,55 @@ export function PreviewPlayer({
     [timeline, playheadTime],
   );
 
-  // Drive playback: video elements advance themselves, photos need a timer.
+  /**
+   * Drive playback: video and audio advance themselves, the clock keeps up.
+   *
+   * The clock is a ref, and this effect deliberately doesn't watch it. Watching
+   * it meant the loop was torn down and rebuilt on every frame, and each rebuild
+   * reset `last` to the moment React finished committing — so a frame's delta
+   * measured commit-to-frame instead of frame-to-frame and quietly lost the
+   * render time out of every tick. The clock ran slow against the media, which
+   * plays at its own honest rate, and once the two were 0.35s apart the sync
+   * below hauled the element back to where the clock thought it was. That jerk,
+   * every few seconds, was the stutter in both picture and sound.
+   *
+   * Published to React at 30Hz rather than every frame: the strip's playhead
+   * has nothing to say at 60 that it can't say at 30, and the whole bench
+   * re-renders on each one.
+   */
   useEffect(() => {
-    if (!playing) {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      return;
-    }
+    if (!playing) return;
 
     let last = performance.now();
+    let sincePublish = 0;
+
     const tick = (now: number) => {
       const delta = (now - last) / 1000;
       last = now;
+      sincePublish += delta;
 
-      onTimeChange(Math.min(total, playheadTime + delta));
-      if (playheadTime + delta >= total) setPlaying(false);
-      else rafRef.current = requestAnimationFrame(tick);
+      const next = Math.min(total, clockRef.current + delta);
+      clockRef.current = next;
+
+      if (next >= total) {
+        publish(next);
+        setPlaying(false);
+        return;
+      }
+      if (sincePublish >= PUBLISH_INTERVAL) {
+        sincePublish = 0;
+        publish(next);
+      }
+      rafRef.current = requestAnimationFrame(tick);
     };
 
     rafRef.current = requestAnimationFrame(tick);
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [playing, playheadTime, total, onTimeChange]);
+    // `publish` and `setPlaying` are read through refs or are setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, total]);
 
   // Selecting a clip in the timeline jumps the playhead to it.
   useEffect(() => {
